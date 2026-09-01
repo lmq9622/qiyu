@@ -56,6 +56,8 @@ from channels import store as channel_store
 # M1：行为 / 状态 / LLM 逻辑已拆分到 companion/ 包
 from companion import *  # noqa: F401,F403
 from runtime import RuntimeManager
+from runtime.memory import MemoryProvider
+from runtime.toolagent import tool_agent
 import companion.active as companion_active
 import companion.emotions as companion_emotions
 import companion.settings as companion_settings
@@ -272,6 +274,7 @@ async def startup():
         if _rt.get("llm_route_model") is not None:
             LLM_ROUTE_MODEL = str(_rt["llm_route_model"])
         logger.info(f"[设置] 已自动加载上次保存的 LLM 配置: 主模型={LLM_MODEL} 路由模型={LLM_ROUTE_MODEL or '（未配置）'}")
+        logger.info(f"[设置] 运行时设置已完整加载（{len(_rt)} 项，含默认值合并）")
     except Exception as e:
         logger.warning(f"[设置] 加载 LLM 配置失败: {e}")
     # 同步 LLM 配置 / 客户端到 companion 模块（行为函数读取各自模块内全局）
@@ -286,6 +289,11 @@ async def startup():
     llm_client = LLMClient()
     companion_active.llm_client = llm_client
     companion_emotions.llm_client = llm_client
+    # M3：Main Brain 统一经 Provider 接口注册进 Runtime，业务层/前端可经 /v1/runtime/providers 查询
+    runtime_manager.registry.register(llm_client, fallback_ids=[])
+    # M4：Tool Agent / Memory 同样注册为 Runtime Provider（业务层经 Provider 接口访问，不直接依赖具体实现）
+    runtime_manager.registry.register(MemoryProvider(mem_mgr), fallback_ids=[])
+    runtime_manager.registry.register(tool_agent, fallback_ids=[])
     await letta_backend.check()
     
     # 预热：把所有角色同步到 Letta，保证记忆检索可命中
@@ -767,6 +775,16 @@ async def chat_completions(request: ChatRequest):
                                 parsed = _parsed2
                         except Exception:
                             pass
+                # 长文兜底2：内容完整（>120字）但模型挤成 1~3 条大消息 → 按句拆成多条短气泡（真人节奏）
+                if _lg_req and len(parsed["messages"]) <= 3:
+                    try:
+                        _lg_total = len("".join(m["text"] for m in parsed["messages"]))
+                        if _lg_total > 120:
+                            _split = _split_longform_bubbles(parsed)
+                            if len(_split["messages"]) > len(parsed["messages"]):
+                                parsed = _split
+                    except Exception:
+                        pass
                 # 空回复兜底：思考模式把预算耗光 / 正文没解析出 JSON → 关掉思考重拉一次，保证前端不出现"……"
                 if not parsed["messages"]:
                     try:
@@ -1639,6 +1657,11 @@ async def runtime_status_api():
 @app.get("/v1/runtime/hardware")
 async def runtime_hardware_api():
     return runtime_manager.hardware.detect().to_dict()
+
+
+@app.get("/v1/runtime/providers")
+async def runtime_providers_api():
+    return {"providers": runtime_manager.registry.list()}
 
 
 # ============ Health ============

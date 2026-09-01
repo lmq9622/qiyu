@@ -26,6 +26,7 @@ class ProviderKind(str, enum.Enum):
     TTS = "tts"                         # 语音合成
     EMBEDDING = "embedding"             # 向量化
     TOOL = "tool"                       # 工具/搜索执行
+    MEMORY = "memory"                   # 记忆（分层检索：bag-of-words / embedding）
 
 
 @dataclass

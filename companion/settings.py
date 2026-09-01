@@ -107,14 +107,49 @@ def is_injection(text: str) -> bool:
         return False
     return any(re.search(p, text, re.IGNORECASE) for p in INJECTION_PATTERNS)
 
+
+# M4：运行时设置全量默认值（启动即完整加载，调用方无需在各自位置散落默认值）
+DEFAULT_RUNTIME_SETTINGS = {
+    "llm_url": LLM_URL,
+    "llm_model": LLM_MODEL,
+    "llm_route_url": LLM_ROUTE_URL,
+    "llm_route_model": LLM_ROUTE_MODEL,
+    "api_key": "",
+    "default_temperature": 0.7,
+    "memory_tags": [],
+    "allow_profanity": False,
+    "allow_naughty": False,
+    "profanity_level": "off",
+    "naughty_level": "off",
+    "thinking_level": "off",
+    "thinking_enabled": False,
+    "desire_base": 50,
+    "web_enabled": True,
+    "proactive_enabled": True,
+    "show_thinking": False,
+    "parallel_requests": "auto",
+    "delayed_reply_enabled": False,
+    "day_memory_enabled": True,
+    "night_memory_enabled": True,
+    "vision_supported": False,
+    "uncensored": False,
+    "user_location": "",
+    "user_gender": "",
+}
+
+
 def load_runtime_settings() -> dict:
+    """读取运行时设置：已保存值覆盖默认值，保证所有键在启动后即有完整取值。"""
+    saved = {}
     if SETTINGS_JSON.exists():
         try:
             with open(SETTINGS_JSON, "r", encoding="utf-8") as f:
-                return json.load(f)
+                saved = json.load(f) or {}
         except Exception:
             pass
-    return {}
+    merged = dict(DEFAULT_RUNTIME_SETTINGS)
+    merged.update(saved)
+    return merged
 
 def save_runtime_settings(settings: dict):
     try:

@@ -10,6 +10,7 @@ from runtime.hardware import (
     HardwareProfile,
 )
 from runtime.manager import RuntimeManager
+from runtime.memory import MemoryProvider
 from runtime.providers import (
     AIProvider,
     EmbeddingProvider,
@@ -24,12 +25,13 @@ from runtime.providers import (
     VisionProvider,
 )
 from runtime.realtime import UnavailableRealtimeBackend
+from runtime.toolagent import ToolAgent, ToolEvidence, tool_agent
 
 __all__ = [
     "BackendCapability", "HardwareDetector", "HardwareProfile",
-    "RuntimeManager",
+    "RuntimeManager", "MemoryProvider",
     "AIProvider", "EmbeddingProvider", "MainBrainProvider", "ProviderKind",
     "ProviderRegistry", "ProviderStatus", "RealtimeBrainProvider",
     "RealtimeDecision", "STTProvider", "TTSProvider", "VisionProvider",
-    "UnavailableRealtimeBackend",
+    "UnavailableRealtimeBackend", "ToolAgent", "ToolEvidence", "tool_agent",
 ]

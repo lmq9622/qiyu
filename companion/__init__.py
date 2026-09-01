@@ -11,6 +11,8 @@ from .emotions import *  # noqa: F401,F403
 from .behavior import *  # noqa: F401,F403
 from .active import *  # noqa: F401,F403
 from .llm import *  # noqa: F401,F403
+from .topic import *  # noqa: F401,F403
+from .scheduler import *  # noqa: F401,F403
 
 __all__ = [
     "AVATAR_UPLOAD_DIR",
@@ -40,6 +42,8 @@ __all__ = [
     "MemoryAddRequest",
     "NUDGE_AFTER_SECONDS",
     "PEER_ROLE_PROMPT",
+    "ProactiveDecision",
+    "ProactiveScheduler",
     "PROACTIVE_JSON",
     "PROACTIVE_WINDOW",
     "PROJECT_DIR",
@@ -54,6 +58,9 @@ __all__ = [
     "STATIC_DIR",
     "SaveRoutesRequest",
     "SaveSettingsRequest",
+    "TopicState",
+    "_topic_state",
+    "_update_topic_state",
     "_CALLBACK_RE",
     "_EVIDENCE_CACHE",
     "_LEAKED_JSON_RE",
@@ -176,6 +183,7 @@ __all__ = [
     "_shared_events",
     "_shared_events_prompt",
     "_should_nudge",
+    "_split_longform_bubbles",
     "_story_state",
     "_subagent_plan_search",
     "_sync_character_to_letta",
@@ -188,6 +196,7 @@ __all__ = [
     "_try_stream_parse",
     "_unescape_json_text",
     "_update_conv_state",
+    "proactive_scheduler",
     "_user_gender_block",
     "_user_network_context",
     "build_resume_prompt",

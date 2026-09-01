@@ -9,7 +9,7 @@ from loguru import logger
 from characters import get_character_manager
 from memory import get_memory_manager
 from channels import get_channel_registry
-from tools import web as web_tools
+from runtime.toolagent import tool_agent
 
 char_mgr = get_character_manager()
 mem_mgr = get_memory_manager()
@@ -19,10 +19,10 @@ llm_client = None
 
 from companion.state import _proactive_store, _schedules_store, user_states
 from companion.settings import _apply_thinking_kwargs, _route_llm_info, load_runtime_settings
-from companion.relations import _char_share_boost, _init_relation, _is_night, _proactive_day_prob, _proactive_night_prob, _save_proactive, _save_schedules
+from companion.relations import _save_proactive, _save_schedules
 from companion.conv import _check_unanswered, _context_gate, _conv_state, _event_similar_to_shared, _record_shared_event, _update_conv_state
-from companion.emotions import _mood_is_great
 from companion.behavior import _topic_similarity
+from companion.scheduler import proactive_scheduler
 
 def _push_event(user_id: str, event: dict):
     q = event_queues.get(user_id)
@@ -309,6 +309,10 @@ async def _subagent_plan_search(query: str) -> list:
     parts = [p.strip() for p in re.split(r"[|\n，,]", content) if p.strip()][:3]
     return parts or [query[:80]]
 
+
+# M4：把搜索子代理注入 runtime.ToolAgent（规划与执行解耦，业务层只面对 Provider 接口）
+tool_agent.planner = _subagent_plan_search
+
 async def _fire_webcheck(user_id: str, payload: dict):
     """联网查证：带思考的子代理规划关键词 → 真实联网检索 → 让模型基于真实结果补一条回复"""
     st = user_states.get(user_id)
@@ -393,49 +397,15 @@ async def _fire_imagecheck(user_id: str, payload: dict):
         logger.warning(f"[找图] 图片回复失败: {e}")
 
 async def _task_agent_search_images(user_id: str, char_id: str, query: str) -> list:
-    """Task Agent 搜图：子代理规划关键词 → 真实图片搜索，返回 [{title, url, image_url}]。"""
-    keywords = await _subagent_plan_search(query)
-    if not keywords:
-        return []
-    seen = set()
-    out = []
-    for kw in keywords[:2]:
-        try:
-            for it in await web_tools.image_search(kw, top_k=3):
-                u = it.get("image_url") or ""
-                if u and u not in seen:
-                    seen.add(u)
-                    out.append(it)
-        except Exception as e:
-            logger.warning(f"[找图] 搜索失败 {kw}: {e}")
-        if len(out) >= 3:
-            break
-    return out[:3]
+    """Task Agent 搜图（M4 委托 runtime.ToolAgent）：真实图片搜索，返回 [{title, url, image_url}]。"""
+    evidence = await tool_agent.search_images(query)
+    return evidence.items
 
 async def _task_agent_search(user_id: str, char_id: str, query: str) -> dict:
-    """Task Agent：执行真实搜索并返回 Evidence {success, items, query}。
+    """Task Agent（M4 委托 runtime.ToolAgent）：真实搜索并返回 Evidence {success, items, query}。
     只有 success=True 且 items 非空时，主模型才允许声称"查到了/发你了"；否则必须如实说没查到。"""
-    keywords = await _subagent_plan_search(query)
-    if not keywords:
-        logger.info(f"[联网] 子代理判定无需搜索: {query[:40]}")
-        return {"success": False, "items": [], "query": query}
-    results = []
-    seen_urls = set()
-    for kw in keywords:
-        for it in await web_tools.web_search(kw, top_k=4):
-            u = it.get("url") or ""
-            if u and u not in seen_urls:
-                seen_urls.add(u)
-                results.append(it)
-        if len(results) >= 6:
-            break
-    if not results and any(k in query for k in ("视频", "链接", "热门", "新闻")):
-        try:
-            hot = await web_tools.fetch_hotlist()
-            results = hot[:4] or []
-        except Exception:
-            pass
-    return {"success": bool(results), "items": results[:6], "query": query}
+    evidence = await tool_agent.search(query)
+    return evidence.to_dict()
 
 async def _maybe_daily_proactive(user_id: str, today: str):
     """联想开关（proactive_enabled）控制：好感度驱动的主动频率；
@@ -450,27 +420,15 @@ async def _maybe_daily_proactive(user_id: str, today: str):
 async def _maybe_daily_proactive_for_char(user_id: str, char_id: str):
     if not char_id:
         return
-    now = time.time()
-    key = f"{user_id}::{char_id}"
-    last = (_proactive_store.get(key) or {}).get("last_at") or 0
-    if now - last < 1500:  # 冷却 25 分钟，避免过密
+    # M4：决策全部交给 ProactiveScheduler（冷却/上下文门/关系/耐心/心情/概率）
+    decision = proactive_scheduler.evaluate(user_id, char_id)
+    if not decision.allowed:
+        if decision.reason == "context_gate":
+            _update_conv_state(user_id, char_id, "idle")
         return
-    # Context Gate：正在聊天/冷却/耐心不足/意愿低/有未完成任务时一律不主动
-    allowed, reason = _context_gate(user_id, char_id, now)
-    if not allowed:
-        _update_conv_state(user_id, char_id, "idle")
-        return
-    rel = _init_relation(user_id, char_id)
-    affinity = int(rel.get("affinity", 50))
-    night = _is_night()
-    prob = _proactive_night_prob(affinity) if night else _proactive_day_prob(affinity)
-    # 活泼/外向人设 + 心情好/分享欲高 → 主动找话题概率加成；心情差（当天基调 down）已被 Context Gate 拦截
-    prob = min(0.9, prob + _char_share_boost(char_id) + (0.2 if _mood_is_great(user_id, char_id) else 0.0))
-    if random.random() > prob:
-        return
-    _proactive_store[key] = {"last_at": now}
-    _save_proactive()
-    await _fire_proactive(user_id, night=night, char_id=char_id)
+    # 生成前先登记时间（进入冷却），避免失败后立刻重试
+    proactive_scheduler.record_attempt(user_id, char_id)
+    await _fire_proactive(user_id, night=decision.night, char_id=char_id)
 
 async def _maybe_daily_outline_pass(today: str):
     """每天 04:00 后为前一天生成聊天大纲（幂等：已存在则跳过）；

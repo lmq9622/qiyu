@@ -38,6 +38,7 @@ def _conv_state(user_id: str, char_id: str) -> dict:
             "conv_state": "AVAILABLE_FOR_PROACTIVE", "scene": "ordinary_chat", "interaction_need": 2,
             "patience": 50, "affinity": 50, "friendship": 50,
             "last_topic": "", "last_topic_confidence": 0, "last_topic_shift": False,
+            "previous_topic": "", "topic_transition": "none", "topic_surprise": 0,
             "last_user_intent": "", "last_user_emotion": "",
             "last_user_at": 0, "last_ai_at": 0, "last_proactive_at": 0, "last_proactive_text": "",
             "ended_at": 0, "cooldown_until": 0, "unanswered_pending": None, "updated_at": 0,

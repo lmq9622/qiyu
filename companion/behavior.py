@@ -37,9 +37,9 @@ def _looks_leaked_json(text: str) -> bool:
 
 def _is_search_request(user_content: str) -> bool:
     """用户是否明确要求联网查证/找东西（查/搜/找链接、视频、购物比价、热门、找图）。
-    from companion.active import _looks_like_search, _looks_like_image_request
     用于『声称完成词』过滤：只要用户提了搜索诉求，即使已注入内联证据，
     也不允许首轮回复出现『搜到了/找到了/发你了』（那是 Task Agent 回填后才允许说的话）。"""
+    from companion.active import _looks_like_image_request, _looks_like_search
     try:
         if not load_runtime_settings().get("web_enabled", True):
             return False
@@ -181,6 +181,38 @@ def _finalize_chat_reply(user_id: str, raw_text: str, user_content: str = "", ch
             _p["image_url"] = _m["image_url"]
         pieces.append(_p)
     return text, pieces
+
+def _split_longform_bubbles(parsed: dict, min_bubbles: int = 8) -> dict:
+    """长文输出模式兜底（规格§14 多消息流水线）：模型把完整内容挤在 1~3 条大消息里时，
+    按自然句边界确定性拆成多条短气泡（真人微信逐条发的节奏），避免一堵墙式消息。
+    只在『内容已完整（>120 字）但气泡数过少』时触发，不改变内容本身。"""
+    msgs = parsed.get("messages") or []
+    if not msgs:
+        return parsed
+    total = "".join(m.get("text", "") for m in msgs)
+    if len(msgs) >= min_bubbles or len(total) <= 120:
+        return parsed
+    text = total.strip()
+    parts = [p.strip() for p in re.split(r"(?<=[。！？!?…])\s*|\n+", text) if p.strip()]
+    if len(parts) < min_bubbles:
+        refined = []
+        for p in parts:
+            if len(p) > 60:
+                refined.extend(q.strip() for q in re.split(r"(?<=[，,；;])\s*", p) if q.strip())
+            else:
+                refined.append(p)
+        parts = [p for p in refined if p.strip()]
+    if len(parts) < 2:
+        return parsed
+    bubbles = [
+        {"text": p, "type": "statement", "delay": 0 if i == 0 else (800 + (i % 3) * 500)}
+        for i, p in enumerate(parts)
+    ]
+    # 首条原有的图片等附件保留在第一条上
+    first = msgs[0]
+    if first.get("image_url"):
+        bubbles[0] = {**bubbles[0], "image_url": first.get("image_url")}
+    return {**parsed, "messages": bubbles}
 
 def _topic_similarity(a: str, b: str) -> float:
     """简易话题相似度（0~1）：字符级近似，用于判断用户是否突然换话题"""
@@ -515,7 +547,21 @@ def _apply_chat_side_effects(user_id: str, char_id: str, parsed: dict, user_cont
             # 突然转话题 → 后台重新归纳当天的聊天大纲 + 事件分条（让"今天聊了啥"永远跟得上最新话题）
             asyncio.create_task(_regenerate_day_context(user_id, char_id, force=True))
         new_topic = (parsed.get("topic") or "").strip()
-        st["last_topic"] = new_topic[:80] if new_topic else (user_content or "")[:80]
+        _prev_topic = (st.get("last_topic") or "").strip()
+        _cur_topic = new_topic[:80] if new_topic else (user_content or "")[:80]
+        st["last_topic"] = _cur_topic
+        # M4：话题状态机（previous/transition/surprise/confidence）持久化到 conv_state
+        try:
+            from companion.topic import _update_topic_state
+            _surprise = round(1.0 - _topic_similarity(_prev_topic, _cur_topic), 3) if (_prev_topic and _cur_topic) else 0.0
+            try:
+                _confidence = max(0.0, min(1.0, float(parsed.get("topic_confidence") or 0)))
+            except Exception:
+                _confidence = 0.0
+            _update_topic_state(user_id, char_id, current=_cur_topic, previous=_prev_topic,
+                                transition=_shift_kind, surprise=_surprise, confidence=_confidence)
+        except Exception:
+            pass
     # 会话状态机：每轮内部分析字段（topic/scene/intent/emotion/need）落库，供记忆与主动消息门使用
     _update_conv_state(user_id, char_id, "ai_reply", parsed, user_content)
     # 未完成话题：这轮以提问/等对方决定收尾 → 记下来，供"突然跳话题"感知使用
@@ -641,6 +687,7 @@ __all__ = [
     "_reply_awaits_answer",
     "_sanitize_msg_text",
     "_should_nudge",
+    "_split_longform_bubbles",
     "_story_state",
     "_text_awaits_answer",
     "_topic_similarity",

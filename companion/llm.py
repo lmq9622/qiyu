@@ -31,13 +31,37 @@ from companion.conv import _conv_state, _scene_prompt_block, _shared_events_prom
 from companion.emotions import _emotion_prompt_block
 from companion.behavior import _attention_prompt_block, _classify_topic_shift, _finalize_chat_reply, _find_recent_fact, _recall_probe_target, _story_state
 from companion.active import _looks_like_search, llm_limiter
+from runtime.providers import MainBrainProvider, ProviderStatus
 
-class LLMClient:
-    """LLM 客户端"""
+class LLMClient(MainBrainProvider):
+    """LLM 客户端（实现 runtime.MainBrainProvider，业务层经 Provider 接口访问，
+    未来 Local / Cloud / API / Self-host 自由切换）"""
+
+    id = "llm-client"
+    name = "Main LLM（OpenAI-compatible / llama.cpp / 云端 API）"
     
     def __init__(self):
+        super().__init__()
         self.available = False
         self._check_llm()
+
+    def probe(self) -> ProviderStatus:
+        """诚实上报主大脑可用性（backend=api：当前为 OpenAI-compatible 远端）。"""
+        return ProviderStatus(
+            available=self.available,
+            backend="api",
+            device=(LLM_URL or "").rstrip("/"),
+            reason="" if self.available else "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称",
+        )
+
+    def status(self) -> ProviderStatus:
+        # LLM 可用性随运行时设置变化，每次实时探测（不做缓存）
+        return self.probe()
+
+    async def complete(self, prompt: str, *, max_tokens: int = 512,
+                       temperature: float = 0.7, **kwargs) -> str:
+        """MainBrainProvider.complete：无上下文的独立生成（记忆整理等场景）。"""
+        return await self.summarize_text(prompt, max_tokens=max_tokens)
     
     def _check_llm(self):
         try:
@@ -657,9 +681,15 @@ class LLMClient:
             data = resp.json()
             msg = data["choices"][0].get("message", {})
             content = (msg.get("content") or "").strip()
+            thinking_on = bool((payload.get("chat_template_kwargs") or {}).get("enable_thinking") in (True, "true", "True", 1))
             # 推理模型可能把预算全耗在思考上导致正片为空：退回 reasoning_content 兜底
             if not content:
                 content = (msg.get("reasoning_content") or "").strip()
+            # 思考模式返回空正文（含 reasoning_content 也为空）：降级为不思考重试一次，
+            # 保证 proactive/active/记忆整理等非流式路径也不会出现「……」/空回复
+            if not content and thinking_on:
+                logger.warning("[LLM] 思考模式返回空正文，降级为不思考重试")
+                return await self._call_real_llm_inner(system_msg, messages, temperature, url, model, api_key, no_thinking=True)
             return content
 
     async def _call_real_llm_stream(self, system_msg: str, messages: list, temperature: float,
