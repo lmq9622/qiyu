@@ -624,3 +624,9 @@
 - **demo.py 变薄壳**：5512 行 → 约 1900 行，只保留 FastAPI 端点 + 启动/关闭 + 通道胶水；启动时把 LLM 配置与客户端 push 进 companion 模块。
 - 修复迁移脚本两处静态分析 bug（下标赋值误判绑定、惰性引用误全局排除），迁移后 `_background_loop` 不再报 `_proactive_store` 未定义。
 - **验证**：py_compile 全绿；启动冒烟通过（57 路由、LLM 已连接、RAG/通道注册正常）；test_harness 定点回归 s081 工具 / s151 记忆召回 / s503 长文 / s511 话题恢复 / s008 smalltalk / s113 夜晚 / s260 多轮 / s311 话题转移 → 7/8 通过（s503 一次截断为模型随机性，复跑通过）。
+
+### M2 RuntimeManager + 硬件检测 + Realtime Brain Provider（本次）
+- 新 `runtime/` 包：`providers.py`（Provider 抽象 + ProviderRegistry + RealtimeDecision）、`hardware.py`（HardwareProfile / BackendCapability / HardwareDetector，psutil + WMI/nvidia-smi 探测，跳过虚拟/远程显卡）、`manager.py`（RuntimeManager：生命周期/backend 选择/崩溃恢复）、`realtime.py`（Realtime Brain 接口 + 诚实兜底 UnavailableRealtimeBackend）。
+- 本机实测：CPU=13th Gen i5-13450HX / 10 核 / 32GB，GPU=AMD Radeon RX 6700 XT（Vulkan 可用、无 CUDA）；backend 候选 vulkan（诚实 unavailable）+ cpu（可用），RuntimeManager 选中 CPU 兜底。
+- demo.py 接入：启动时 `runtime_manager.start()`，新增 `GET /v1/runtime/status`、`GET /v1/runtime/hardware`。
+- 原则落地：不把 Vulkan/CUDA 写死；Zero Setup 下 Realtime Brain 诚实上报未配置并回退 Main Brain，不假装可用。

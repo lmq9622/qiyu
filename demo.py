@@ -55,6 +55,7 @@ from channels import store as channel_store
 
 # M1：行为 / 状态 / LLM 逻辑已拆分到 companion/ 包
 from companion import *  # noqa: F401,F403
+from runtime import RuntimeManager
 import companion.active as companion_active
 import companion.emotions as companion_emotions
 import companion.settings as companion_settings
@@ -222,6 +223,7 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 全局状态
+runtime_manager = RuntimeManager()
 letta_backend = get_letta_backend()
 char_mgr = get_character_manager()
 mem_mgr = get_memory_manager()
@@ -256,6 +258,7 @@ chat_gate = UserChatGate()
 
 @app.on_event("startup")
 async def startup():
+    runtime_manager.start()
     global llm_client, LLM_URL, LLM_MODEL, LLM_ROUTE_URL, LLM_ROUTE_MODEL
     # 自动加载上次保存的 LLM 设置（主模型/路由模型/API Key），重启后不用重新配置
     try:
@@ -430,6 +433,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    runtime_manager.stop()
     if _background_task:
         _background_task.cancel()
 
@@ -1623,6 +1627,18 @@ async def events_stream(user_id: str = "web_user"):
             event_queues.pop(user_id, None)
             raise
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+
+
+# ============ Runtime ============
+
+@app.get("/v1/runtime/status")
+async def runtime_status_api():
+    return runtime_manager.status()
+
+
+@app.get("/v1/runtime/hardware")
+async def runtime_hardware_api():
+    return runtime_manager.hardware.detect().to_dict()
 
 
 # ============ Health ============
