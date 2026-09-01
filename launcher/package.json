@@ -1,0 +1,82 @@
+{
+  "name": "qiyu-desktop",
+  "productName": "栖语",
+  "version": "2.1.0",
+  "description": "栖语 Qiyu - 平级 AI 伙伴桌面程序",
+  "author": "Qiyu",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.qiyu.desktop",
+    "productName": "栖语",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../characters",
+        "to": "backend/characters",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../config",
+        "to": "backend/config",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../gateway",
+        "to": "backend/gateway",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../memory",
+        "to": "backend/memory",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../rag",
+        "to": "backend/rag",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../wechat",
+        "to": "backend/wechat",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../embedding",
+        "to": "backend/embedding",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "../demo.py",
+        "to": "backend/demo.py"
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "栖语"
+    }
+  }
+}

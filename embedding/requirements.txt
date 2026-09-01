@@ -1,0 +1,6 @@
+sentence-transformers>=2.5.0
+torch>=2.2.0
+numpy>=1.26.0
+qdrant-client>=1.8.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
