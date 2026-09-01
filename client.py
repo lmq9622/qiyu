@@ -95,7 +95,8 @@ def is_backend_ready() -> bool:
     """检查后端服务是否就绪"""
     try:
         import urllib.request
-        urllib.request.urlopen("http://127.0.0.1:8765/health", timeout=1)
+        port = int(os.getenv("QIYU_PORT", "8765"))
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
         return True
     except Exception:
         return False
@@ -128,11 +129,12 @@ def run_backend():
     
     import uvicorn
     from demo import app
-    
+    port = int(os.getenv("QIYU_PORT", "8765"))
+
     uvicorn.run(
         app,
         host="127.0.0.1",
-        port=8765,
+        port=port,
         log_level="warning",
         access_log=False,
     )

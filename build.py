@@ -21,6 +21,7 @@ ICON_FILE = PROJECT_ROOT / "assets" / "icon.ico"  # 如果有图标的话
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 SPEC_FILE = PROJECT_ROOT / f"{OUTPUT_NAME}.spec"
+VERSION = "0.0.18"   # M5 打包版本（每次打包顺延 +0.0.1）
 
 # ============ 检查环境 ============
 def check_env():
@@ -165,6 +166,27 @@ def build():
         "channels.wechatauto_channel",
         "psutil",
         "channels.placeholders",
+        # M1/M3/M4：companion 包 + runtime Provider 层（函数级惰性 import 需要显式收集）
+        "companion",
+        "companion.constants",
+        "companion.state",
+        "companion.models",
+        "companion.settings",
+        "companion.relations",
+        "companion.conv",
+        "companion.emotions",
+        "companion.behavior",
+        "companion.active",
+        "companion.llm",
+        "companion.topic",
+        "companion.scheduler",
+        "runtime",
+        "runtime.providers",
+        "runtime.hardware",
+        "runtime.manager",
+        "runtime.realtime",
+        "runtime.memory",
+        "runtime.toolagent",
         # ClawBot 二维码生成（demo.py 运行时惰性导入，PyInstaller 静态分析不到）
         "qrcode",
         "PIL",
@@ -274,6 +296,11 @@ def build():
                 print(f"[OK] Wechaty 网关目录已复制到 {dst_gw}（运行 install.bat 安装依赖后即可用）")
         except Exception as e:
             print(f"[WARN] 复制 Wechaty 网关目录失败: {e}")
+        # M5：可独立更新的 sidecar 目录（runtime/backends/models/assets/config/tools）
+        try:
+            create_sidecars()
+        except Exception as e:
+            print(f"[WARN] 创建 sidecar 目录失败: {e}")
         print("=" * 60)
         return True
     else:
@@ -291,6 +318,50 @@ def build_fast():
     cmd = [sys.executable, "-m", "PyInstaller", str(SPEC_FILE), "--noconfirm", "--clean"]
     result = subprocess.run(cmd, cwd=PROJECT_ROOT)
     return result.returncode == 0
+
+
+def create_sidecars():
+    """M5（规格§10）：构建可独立更新的 sidecar 目录。
+    Qiyu.exe + runtime/ + backends/ + models/ + assets/ + config/ + tools/ + wechaty/
+    模型 / 后端 / 配置不物理塞进 EXE：更新 Vulkan backend 不用重新下载整个模型。"""
+    base = DIST_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    # 版本标记
+    try:
+        (base / "VERSION.txt").write_text(f"{VERSION}\n", encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] 写 VERSION.txt 失败: {e}")
+    # 可独立更新的目录（附说明）
+    sidecar_notes = {
+        "runtime": "runtime 资源目录（可独立更新）。",
+        "backends": "推理后端目录（llama.cpp 等，可独立更新）。",
+        "models": "本地模型目录（GGUF 等，可独立更新）。",
+        "assets": "资源目录（图标等，可独立更新）。",
+        "tools": "辅助工具目录（可独立更新）。",
+    }
+    for name, note in sidecar_notes.items():
+        d = base / name
+        d.mkdir(parents=True, exist_ok=True)
+        readme = d / "README.txt"
+        if not readme.exists():
+            readme.write_text(note + "\n", encoding="utf-8")
+        print(f"[OK] sidecar: {d}")
+    # 用户可编辑配置副本（exe 启动时优先读 exe 同目录 config/）
+    cfg_dir = base / "config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("settings.yaml", "routes.yaml"):
+        src = PROJECT_ROOT / "config" / fname
+        if src.exists():
+            dst = cfg_dir / fname
+            if not dst.exists():
+                shutil.copy2(src, dst)
+            print(f"[OK] 配置副本: {dst}")
+    if ICON_FILE.exists():
+        try:
+            shutil.copy2(ICON_FILE, base / "assets" / "icon.ico")
+        except Exception as e:
+            print(f"[WARN] 复制图标失败: {e}")
+    print("[OK] sidecar 结构完成: runtime/ backends/ models/ assets/ config/ tools/")
 
 
 # ============ 主入口 ============

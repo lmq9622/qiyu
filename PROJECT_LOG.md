@@ -630,3 +630,26 @@
 - 本机实测：CPU=13th Gen i5-13450HX / 10 核 / 32GB，GPU=AMD Radeon RX 6700 XT（Vulkan 可用、无 CUDA）；backend 候选 vulkan（诚实 unavailable）+ cpu（可用），RuntimeManager 选中 CPU 兜底。
 - demo.py 接入：启动时 `runtime_manager.start()`，新增 `GET /v1/runtime/status`、`GET /v1/runtime/hardware`。
 - 原则落地：不把 Vulkan/CUDA 写死；Zero Setup 下 Realtime Brain 诚实上报未配置并回退 Main Brain，不假装可用。
+
+### M3 MainBrain Provider 统一 + 思考失败兜底（本次）
+- `companion/llm.py` 的 `LLMClient` 改为实现 `runtime.MainBrainProvider`（`id=llm-client`，`probe()/status()` 诚实实时探测，`complete()` 映射到记忆整理用 summarize），启动时注册进 `runtime_manager.registry`。
+- 新增 `GET /v1/runtime/providers`：前端/业务层统一查看已注册 Provider（main_brain / memory / tool / realtime_brain）。
+- 思考失败兜底（规格§54-14/15 禁止「thinking 失败只返回……」）：非流式 `_call_real_llm_inner` 在思考模式返回空正文（含 reasoning_content 也为空）时自动降级为 `no_thinking` 重试一次；流式路径此前已具备同样降级，覆盖 proactive/active/记忆整理等全部非流式路径。
+- **修复 M1 遗留迁移 bug**：`behavior._is_search_request` 引用了 `active._looks_like_search` 但只在 docstring 里留了 import（真实 NameError，流式后处理崩溃→RemoteProtocolError）。已改为函数内惰性导入；修复前 m3check 6 场景 1/6 过，修复后 6/6。
+- **验证**：定点回归 s008/s081/s151/s311/s503/s511 → 6/6；`/v1/runtime/providers` 返回 4 个 Provider 且状态诚实。
+
+### M4 话题状态机 / 主动调度器 / Tool Agent / 记忆分层 / 设置全量加载（本次）
+- **Topic State（规格§16）**：新 `companion/topic.py`——`TopicState(current/previous/transition/surprise/confidence)`，每轮回复后由 `_apply_chat_side_effects` 持久化到 conv_state（新增 `previous_topic/topic_transition/topic_surprise` 默认字段）。
+- **Proactive Scheduler（规格§18/19/20/35/36）**：新 `companion/scheduler.py`——`ProactiveScheduler` 把冷却/上下文门/关系/耐心/心情/概率收敛为 `evaluate()`；冷却按「刚结束对话→延长到 1 小时，关系好→可稍短」动态化。`_maybe_daily_proactive_for_char` 改为薄委托。
+- **修复 `random` 未导入 bug**：`active.py` 的 `random.random()` 从未 `import random`（被后台循环宽 try/except 吞掉，主动消息概率门实际从未生效），随调度器重构一并修复。
+- **Tool Agent（规格§21/54）**：新 `runtime/toolagent.py`——`ToolAgent(TOOL)` 规划（子代理注入）→ 真实联网/搜图 → 诚实 `ToolEvidence`；`_task_agent_search*` 改为委托，不假装搜索成功。注册进 runtime registry。
+- **记忆分层**：新 `runtime/memory.py`——`MemoryProvider(MEMORY)` 默认 bag-of-words（SimpleVectorizer，零依赖低端可用），注册可用 EmbeddingProvider 后自动升级为 embedding 重排 + bag-of-words 兜底，诚实上报 backend。
+- **设置全量加载**：`load_runtime_settings()` 增加 `DEFAULT_RUNTIME_SETTINGS` 合并（24 项），启动即完整取值，不再依赖各调用点散落默认值。
+- **验证**：行为专项 s501-s526 全量 26/26 通过（story_listener/recall_recent/old_recall/abrupt_shift/unfinished_topic/natural_shift/minimal_input/strong_emotion/rejection/proactive_cooldown 全绿）；s503 长文「挤成 1 条大消息」问题新增确定性按句拆分兜底 `_split_longform_bubbles`，复跑 1/1。
+
+### M5 打包结构 + sidecar 独立更新（本次）
+- 规格§10：`Qiyu.exe + runtime/ + backends/ + models/ + assets/ + config/ + tools/ + wechaty/`，模型/后端/配置不物理塞进 EXE，可独立更新（更新 Vulkan backend 不用重下模型）。
+- `build.py`：版本常量 `0.0.18`；hidden_imports 补全 `companion.*` 与 `runtime.*`（函数级惰性导入需显式收集）；`create_sidecars()` 在打包成功后生成 `dist/runtime|backends|models|assets|config|tools`（含说明 + 用户可编辑配置副本 + VERSION.txt）；保留 torch/transformers 等重型依赖排除与 psutil hidden import。
+- `config/__init__.py`：exe 模式优先读 exe 同目录 `config/`（用户可改配置不随包重建），否则回退内置。
+- 新增仓库 `models/`、`backends/`、`assets/` 目录（含 README，说明可放本地 GGUF/llama.cpp/资源）。
+- **验证**：`python build.py --check-only` 环境全绿；`QIYU_OUTPUT_NAME=Qiyu-M5 python build.py` 真实构建产物 + sidecar 结构检查；py_compile 全绿；行为回归 26/26。

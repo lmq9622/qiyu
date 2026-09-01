@@ -4,6 +4,7 @@
 """
 
 import os
+import sys
 import yaml
 import time
 import threading
@@ -16,7 +17,18 @@ from loguru import logger
 
 load_dotenv()
 
-CONFIG_DIR = Path(__file__).parent
+def _config_dir() -> Path:
+    """配置目录：exe 模式优先使用 exe 同目录 config/（用户可编辑、独立更新，不随包重建），
+    否则使用内置（PyInstaller 解压目录 / 源码目录）。"""
+    if hasattr(sys, "_MEIPASS"):
+        exe_dir = Path(sys.executable).resolve().parent
+        sidecar = exe_dir / "config"
+        if (sidecar / "settings.yaml").exists() or (sidecar / "routes.yaml").exists():
+            return sidecar
+    return Path(__file__).parent
+
+
+CONFIG_DIR = _config_dir()
 
 
 class ConfigManager:
