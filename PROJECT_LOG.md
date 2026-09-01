@@ -608,3 +608,19 @@
 - run3 s143/s149：刚说完就问记不记得 → 「怕黑。刚才自己说的。」「杭州 刚才自己发的」——已升级为 recent_fact 机制，回测通过。
 - run3 s223/s235：自然接话、轻微调侃 → natural_shift / smalltalk 均通过。
 - 工具幻觉护栏（run3 4 例首轮编造）：`scheduled_at`/stale 机制加强，验证不退化。
+
+---
+
+## 8. 架构迁移 M0-M5（2026-09-01 起）
+
+目标架构：Qiyu App → Qiyu Runtime → Companion Runtime（Realtime Brain + Main Brain + Memory + Emotion/Relation + Tool/Agent + Voice/Vision/Avatar + Scheduler）。行为归代码管（状态机/调度/上下文），台词归模型管；禁止巨型 System Prompt 万能论；禁止把 Vulkan/CUDA 写死；禁止要求用户装开发环境。
+
+### M0 已基线（commit e519f05）
+- `git init` + 首个基线提交；`data/` 运行时数据与角色文件重置（用户明确不留用户数据）。
+- 环境验证：Python 3.13.7、远端 LLM（192.168.2.6:8081）可达。
+
+### M1 Provider 抽象 + companion/ 包拆分（本次）
+- **新 `companion/` 包**：`constants / state / models / settings / relations / conv / emotions / behavior / active / llm` 十个模块，从 demo.py **逐字搬运**行为/状态/LLM 逻辑（不改语义），仅对 5 处跨模块循环引用做函数级惰性 import。
+- **demo.py 变薄壳**：5512 行 → 约 1900 行，只保留 FastAPI 端点 + 启动/关闭 + 通道胶水；启动时把 LLM 配置与客户端 push 进 companion 模块。
+- 修复迁移脚本两处静态分析 bug（下标赋值误判绑定、惰性引用误全局排除），迁移后 `_background_loop` 不再报 `_proactive_store` 未定义。
+- **验证**：py_compile 全绿；启动冒烟通过（57 路由、LLM 已连接、RAG/通道注册正常）；test_harness 定点回归 s081 工具 / s151 记忆召回 / s503 长文 / s511 话题恢复 / s008 smalltalk / s113 夜晚 / s260 多轮 / s311 话题转移 → 7/8 通过（s503 一次截断为模型随机性，复跑通过）。
