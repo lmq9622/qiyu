@@ -4,6 +4,7 @@ import re
 import asyncio
 import time
 import uuid
+import httpx
 from datetime import datetime, timedelta
 from loguru import logger
 from characters import get_character_manager
@@ -57,35 +58,22 @@ def _register_session(user_id: str, channel_id: str = ""):
         pass
 
 class _LLMLimiter:
-    def __init__(self):
-        self._lock = asyncio.Lock()
-        self._inflight = 0
+    """LLM 并发闸（规格§25）：委托统一 GlobalConcurrencyLimiter。
+
+    parallel_requests 选项：auto/1/2/3/4/0(不限制)；auto 按硬件并发能力自动决定。
+    """
 
     def limit(self) -> int:
-        runtime = load_runtime_settings()
-        v = str(runtime.get("parallel_requests") or "auto").strip().lower()
-        if v in ("0", "unlimited", "no"):
-            return 0
-        if v == "auto":
-            return 4
-        try:
-            return max(1, min(4, int(v)))
-        except Exception:
-            return 4
+        from runtime.concurrency import concurrency_limiter
+        return concurrency_limiter.configured_limit()
 
     async def acquire(self):
-        limit = self.limit()
-        if limit <= 0:
-            return
-        while True:
-            async with self._lock:
-                if self._inflight < limit:
-                    self._inflight += 1
-                    return
-            await asyncio.sleep(0.4)
+        from runtime.concurrency import concurrency_limiter
+        await concurrency_limiter.acquire("llm")
 
     def release(self):
-        self._inflight = max(0, self._inflight - 1)
+        from runtime.concurrency import concurrency_limiter
+        concurrency_limiter.release("llm")
 
 llm_limiter = _LLMLimiter()
 
@@ -234,6 +222,14 @@ async def _fire_proactive(user_id: str, night: bool = False, char_id: str = ""):
             return
         _proactive_store[key] = {"last_at": time.time(), "last_text": reply_text[:200]}
         _save_proactive()
+        try:
+            from runtime.db import unified_store
+            unified_store.record_proactive(
+                user_id, char_id, "proactive", reply_text[:200],
+                topic=(_conv_state(user_id, char_id).get("last_topic") or "")[:80],
+                decision="sent")
+        except Exception:
+            pass
         await _send_active_messages(user_id, messages, "闲聊", reason="night" if night else "proactive", char_id=char_id)
         cs = _conv_state(user_id, char_id)
         _record_shared_event(user_id, char_id, f"proactive_{int(time.time())}", reply_text, cs.get("last_topic", ""))
@@ -602,13 +598,14 @@ async def _regenerate_day_context(user_id: str, char_id: str, date_str: str = ""
 async def _background_loop():
     """触发层后台调度：nudge/reminder 定时任务 + 主动消息频率（好感度驱动）+ 未回复失落追踪"""
     _tool_task_refs = set()
-    _tool_slots = asyncio.Semaphore(3)
 
     async def _run_limited(coro):
         # 联网/找图任务耗时较长（子代理规划 + 真实搜索 + 补回复），
         # 不能阻塞背景循环逐条串行执行，否则多用户排队时回复延迟会被拉爆。
-        # 联网类额外用信号量限并发，避免真实搜索风暴；LLM 调用由 llm_limiter 兜底。
-        async with _tool_slots:
+        # 联网类走 GlobalConcurrencyLimiter(tool) 子闸，避免真实搜索风暴；
+        # LLM 调用由 llm_limiter（同总闸）兜底。
+        from runtime.concurrency import concurrency_limiter
+        async with concurrency_limiter.slot("tool"):
             try:
                 await coro
             except Exception:

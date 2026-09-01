@@ -76,7 +76,7 @@ class LLMClient(MainBrainProvider):
     
     async def _build_chat_system_msg(self, char_id: str, messages: list,
                                      user_id: str = "", use_memory: bool = True, use_rag: bool = True,
-                                     channel=None) -> str:
+                                     channel=None, pending_messages: list | None = None) -> str:
         """构建聊天系统提示词（人设平级约束 + 角色卡 + 记忆 + 开关），chat 与 chat_stream 共用"""
         # 提取用户输入
         user_input = ""
@@ -370,6 +370,24 @@ class LLMClient(MainBrainProvider):
             except Exception as e:
                 logger.warning(f"[微信表情] 提示词注入失败: {e}")
 
+        # §15 多消息流水线：用户连续发来的多条消息作为结构化 pending_messages 批次
+        try:
+            if pending_messages:
+                from companion.pipeline import build_pending_messages_block
+                _pb = build_pending_messages_block(pending_messages)
+                if _pb:
+                    system_parts.append("\n" + _pb)
+        except Exception:
+            pass
+        # §17 会话投入状态：讲故事/长文后用户没回，控制推进/等待/收尾
+        try:
+            from companion.pipeline import engagement_prompt_block
+            _eg = engagement_prompt_block(user_id, char_id) if (user_id and char_id) else ""
+            if _eg:
+                system_parts.append("\n" + _eg)
+        except Exception:
+            pass
+
         final_reminder = (
             "\n\n【最后提醒（必须遵守）】只输出 JSON（包含 conversation_state 和 messages），不要输出任何其他内容、"
             "不要解释、不要 Markdown 代码块；消息要像真人随手发的微信。"
@@ -378,12 +396,14 @@ class LLMClient(MainBrainProvider):
 
     async def chat(self, char_id: str, messages: list, temperature: float = 0.7,
                    user_id: str = "", use_memory: bool = True, use_rag: bool = True,
-                   channel=None) -> str:
-        """生成回复，自动注入记忆和知识"""
+                   channel=None, pending_messages: list | None = None) -> str:
+        """生成回复，自动注入记忆和知识；pending_messages=§15 连续多条用户消息批次。"""
         if not self.available:
             raise HTTPException(503, "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称。")
-        system_msg = await self._build_chat_system_msg(char_id, messages, user_id, use_memory, use_rag, channel)
-        raw = await self._call_real_llm(system_msg, messages, temperature)
+        system_msg = await self._build_chat_system_msg(char_id, messages, user_id, use_memory, use_rag, channel, pending_messages)
+        from runtime.perf import perf_monitor
+        with perf_monitor.time("llm_ttft", char=char_id):
+            raw = await self._call_real_llm(system_msg, messages, temperature)
         user_content = ""
         for m in reversed(messages):
             if m.get("role") == "user":
@@ -393,11 +413,11 @@ class LLMClient(MainBrainProvider):
 
     async def chat_stream(self, char_id: str, messages: list, temperature: float = 0.7,
                           user_id: str = "", use_memory: bool = True, use_rag: bool = True,
-                          channel=None):
-        """流式生成回复：yield (reasoning_delta, content_delta)"""
+                          channel=None, pending_messages: list | None = None):
+        """流式生成回复：yield (reasoning_delta, content_delta)；pending_messages=§15 批次。"""
         if not self.available:
             raise HTTPException(503, "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称。")
-        system_msg = await self._build_chat_system_msg(char_id, messages, user_id, use_memory, use_rag, channel)
+        system_msg = await self._build_chat_system_msg(char_id, messages, user_id, use_memory, use_rag, channel, pending_messages)
         async for reasoning, content in self._call_real_llm_stream(system_msg, messages, temperature):
             yield reasoning, content
 

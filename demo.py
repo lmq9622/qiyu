@@ -258,8 +258,25 @@ class UserChatGate:
 chat_gate = UserChatGate()
 
 
+def _build_trailing_user_batch(messages: list) -> list | None:
+    """§15 多消息流水线：取末尾连续的多条用户消息（中间无助手回复）作为结构化批次。"""
+    batch = []
+    for m in reversed(messages or []):
+        if m.get("role") != "user":
+            break
+        batch.append({"text": _msg_text(m.get("content", "")), "timestamp": time.time()})
+    batch.reverse()
+    return batch if len(batch) >= 2 else None
+
+
 @app.on_event("startup")
 async def startup():
+    # §48 分层日志：runtime/conversation/tool/memory/performance/error
+    try:
+        from runtime.logging_setup import configure_logging
+        configure_logging()
+    except Exception as e:
+        logger.warning(f"[日志] 分层日志初始化失败: {e}")
     runtime_manager.start()
     global llm_client, LLM_URL, LLM_MODEL, LLM_ROUTE_URL, LLM_ROUTE_MODEL
     # 自动加载上次保存的 LLM 设置（主模型/路由模型/API Key），重启后不用重新配置
@@ -292,8 +309,32 @@ async def startup():
     # M3：Main Brain 统一经 Provider 接口注册进 Runtime，业务层/前端可经 /v1/runtime/providers 查询
     runtime_manager.registry.register(llm_client, fallback_ids=[])
     # M4：Tool Agent / Memory 同样注册为 Runtime Provider（业务层经 Provider 接口访问，不直接依赖具体实现）
-    runtime_manager.registry.register(MemoryProvider(mem_mgr), fallback_ids=[])
+    mem_provider = MemoryProvider(mem_mgr)
+    runtime_manager.registry.register(mem_provider, fallback_ids=[])
     runtime_manager.registry.register(tool_agent, fallback_ids=[])
+    # P1：Vision / STT / TTS / Embedding / Avatar / Platform Provider 统一注册
+    from runtime.vision import MainBrainVisionProvider
+    from runtime.stt import stt_provider
+    from runtime.tts import tts_provider
+    from runtime.embedding_provider import embedding_provider
+    from runtime.avatar import Live2DAvatarProvider, VRCAvatarProvider
+    from runtime.platform import platform_registry
+    from runtime.concurrency import concurrency_limiter
+    _vision = MainBrainVisionProvider(llm_client)
+    runtime_manager.registry.register(_vision, fallback_ids=[])
+    runtime_manager.registry.register(stt_provider, fallback_ids=[])
+    runtime_manager.registry.register(tts_provider, fallback_ids=[])
+    runtime_manager.registry.register(embedding_provider, fallback_ids=[])
+    mem_provider.attach_embedding(embedding_provider)
+    runtime_manager.registry.register(Live2DAvatarProvider(), fallback_ids=[])
+    runtime_manager.registry.register(VRCAvatarProvider(), fallback_ids=[])
+    for _pp in platform_registry.list():
+        _prov = platform_registry.get(_pp.get("id"))
+        if _prov is not None:
+            runtime_manager.registry.register(_prov, fallback_ids=[])
+    concurrency_limiter.refresh()
+    # §13 微基准：启动后异步跑一次（有真实 backend 就实测，否则硬件启发式）
+    asyncio.create_task(runtime_manager.bench())
     await letta_backend.check()
     
     # 预热：把所有角色同步到 Letta，保证记忆检索可命中
@@ -687,6 +728,18 @@ async def chat_completions(request: ChatRequest):
                 # 轮到本消息：写入用户消息，保证历史顺序 = 用户/助手交替
                 for _mc in mem_contents:
                     mem_mgr.add_message(user_id, "user", _mc, char_id)
+                try:
+                    from runtime.db import unified_store
+                    for _mc in mem_contents:
+                        unified_store.record_message(user_id, char_id, "user", _mc)
+                except Exception:
+                    pass
+                try:
+                    from runtime.logging_setup import logger_conv
+                    for _mc in mem_contents:
+                        logger_conv.info(f"[{user_id}] {char_id} 用户: {_mc[:200]}")
+                except Exception:
+                    pass
                 runtime = load_runtime_settings()
                 show_thinking = bool(runtime.get("show_thinking"))
                 full_raw = []
@@ -702,11 +755,13 @@ async def chat_completions(request: ChatRequest):
                     except Exception:
                         _rfh = None
                 try:
+                    _pending = _build_trailing_user_batch(llm_messages)
                     async for reasoning, content in llm_client.chat_stream(
                         char_id, llm_messages, temperature,
                         user_id=user_id,
                         use_memory=request.use_memory,
                         use_rag=request.use_rag,
+                        pending_messages=_pending,
                     ):
                         if reasoning and show_thinking:
                             data = {
@@ -820,6 +875,22 @@ async def chat_completions(request: ChatRequest):
                         user_id, "assistant", reply_text, char_id,
                         pieces=_pieces,
                     )
+                    try:
+                        from runtime.db import unified_store
+                        unified_store.record_message(user_id, char_id, "assistant", reply_text, pieces=_pieces)
+                        unified_store.record_emotion(user_id, char_id, _emotion_state(user_id, char_id) or {})
+                        relation = relation or {}
+                        unified_store.record_relationship(
+                            user_id, char_id,
+                            int(relation.get("affinity") or 0), int(relation.get("friendship") or 0),
+                            str(relation.get("tier") or ""), str(relation.get("relationship") or ""))
+                    except Exception:
+                        pass
+                    try:
+                        from runtime.logging_setup import logger_conv
+                        logger_conv.info(f"[{user_id}] {char_id} 助手: {reply_text[:200]}")
+                    except Exception:
+                        pass
                     asyncio.create_task(_run_memory_pipeline(user_id, char_id))
                 else:
                     mem_mgr.add_message(user_id, "assistant", "(无回复)", char_id)
@@ -852,16 +923,33 @@ async def chat_completions(request: ChatRequest):
             _update_conv_state(user_id, char_id, "user_message")
             for _mc in mem_contents:
                 mem_mgr.add_message(user_id, "user", _mc, char_id)
+            try:
+                from runtime.db import unified_store
+                from runtime.logging_setup import logger_conv
+                for _mc in mem_contents:
+                    logger_conv.info(f"[{user_id}] {char_id} 用户: {_mc[:200]}")
+                    unified_store.record_message(user_id, char_id, "user", _mc)
+            except Exception:
+                pass
+            _pending = _build_trailing_user_batch(llm_messages)
             reply, pieces = await llm_client.chat(
                 char_id, llm_messages, temperature,
                 user_id=user_id,
                 use_memory=request.use_memory,
                 use_rag=request.use_rag,
+                pending_messages=_pending,
             )
             if reply:
                 mem_mgr.add_message(user_id, "assistant", reply, char_id, pieces=pieces)
             else:
                 mem_mgr.add_message(user_id, "assistant", "(无回复)", char_id)
+            try:
+                from runtime.db import unified_store
+                from runtime.logging_setup import logger_conv
+                logger_conv.info(f"[{user_id}] {char_id} 助手: {(reply or '(无回复)')[:200]}")
+                unified_store.record_message(user_id, char_id, "assistant", reply or "(无回复)", pieces=pieces)
+            except Exception:
+                pass
             asyncio.create_task(_run_memory_pipeline(user_id, char_id))
         return JSONResponse(content={
             "id": response_id,
@@ -1665,6 +1753,131 @@ async def runtime_providers_api():
 
 
 # ============ Health ============
+
+
+
+# ============ Avatar API（§40/§41：Live2D / VRC 统一动作接口） ============
+@app.get("/v1/avatar")
+async def avatar_state():
+    """头像当前状态 + 可用 Provider（前端/外部 Live2D 运行时查询）。"""
+    from runtime.avatar import avatar_controller
+    return {
+        "state": avatar_controller.state(),
+        "providers": avatar_controller.list_providers(),
+    }
+
+
+@app.post("/v1/avatar")
+async def avatar_apply(data: dict):
+    """AI 输出 emotion/intensity/action → 具体平台命令。
+
+    body: {"emotion": "surprised", "intensity": 0.4, "action": "look_at_user",
+           "avatar_type": "live2d"|"vrc"}
+    """
+    from runtime.avatar import AvatarAction, avatar_controller
+    action = AvatarAction(
+        emotion=str(data.get("emotion") or "neutral"),
+        intensity=float(data.get("intensity") or 0.0),
+        action=str(data.get("action") or "idle"),
+        expression=str(data.get("expression") or ""),
+        gesture=str(data.get("gesture") or ""),
+        text=str(data.get("text") or ""),
+    )
+    cmd = await avatar_controller.apply(action, str(data.get("avatar_type") or "live2d"))
+    return {"ok": True, "command": cmd, "state": avatar_controller.state()}
+
+
+@app.post("/v1/avatar/interrupt")
+async def avatar_interrupt():
+    from runtime.avatar import avatar_controller
+    return await avatar_controller.interrupt()
+
+
+# ============ 性能监控（§49） ============
+@app.get("/v1/perf")
+async def perf_api():
+    from runtime.perf import perf_monitor
+    perf_monitor.flush()
+    return perf_monitor.snapshot()
+
+
+# ============ 消息平台（§46） ============
+@app.get("/v1/platforms")
+async def platforms_api():
+    from runtime.platform import platform_registry
+    return {"platforms": platform_registry.list()}
+
+
+# ============ MiniMind-O 模型（§11/§12） ============
+@app.get("/v1/runtime/models")
+async def runtime_models_api():
+    return runtime_manager.model_status()
+
+
+@app.post("/v1/runtime/models/load")
+async def runtime_models_load(data: dict):
+    return runtime_manager.load_model(str(data.get("path") or ""))
+
+
+@app.post("/v1/runtime/models/unload")
+async def runtime_models_unload():
+    return runtime_manager.unload_model()
+
+
+@app.post("/v1/runtime/realtime/judge")
+async def runtime_realtime_judge(data: dict):
+    """Realtime Brain 单轮判断（MiniMind-O 真实后端；未部署时诚实回退 Main Brain）。"""
+    decision = await runtime_manager.realtime_judge(str(data.get("text") or ""), data.get("context"))
+    return {"decision": decision.to_dict()}
+
+
+# ============ TTS（§42/§43） ============
+@app.post("/v1/tts")
+async def tts_api(data: dict):
+    """语音合成：text + emotion/intensity/speed/pitch/pause_style/voice。
+
+    返回 wav/mp3 文件流；未配置可用引擎时返回 503（不假装发声）。
+    """
+    from runtime.tts import tts_provider
+    if not tts_provider.status().available:
+        return JSONResponse(status_code=503, content={"error": "tts_unavailable", "reason": tts_provider.status().reason})
+    out = await tts_provider.synthesize(
+        str(data.get("text") or ""),
+        emotion=str(data.get("emotion") or ""),
+        intensity=data.get("intensity"),
+        speed=data.get("speed"),
+        pitch=data.get("pitch"),
+        pause_style=str(data.get("pause_style") or ""),
+        voice=str(data.get("voice") or ""),
+    )
+    if not out or not os.path.exists(out.get("path", "")):
+        return JSONResponse(status_code=503, content={"error": "tts_failed"})
+    return FileResponse(out["path"], media_type="audio/wav" if out.get("format") == "wav" else "audio/mpeg")
+
+
+@app.get("/v1/tts/status")
+async def tts_status_api():
+    from runtime.tts import tts_provider
+    return {"provider": tts_provider.id, "status": tts_provider.status().to_dict()}
+
+
+# ============ STT（§42） ============
+@app.post("/v1/stt")
+async def stt_api(request: Request):
+    """语音转写：raw body 为音频字节（wav/silk/amr/mp3），返回 {text}。"""
+    from runtime.stt import stt_provider
+    body = await request.body()
+    if not body:
+        return JSONResponse(status_code=400, content={"error": "empty_audio"})
+    text = await stt_provider.transcribe(body)
+    return {"text": text, "available": stt_provider.status().available}
+
+
+@app.get("/v1/stt/status")
+async def stt_status_api():
+    from runtime.stt import stt_provider
+    return {"provider": stt_provider.id, "status": stt_provider.status().to_dict()}
+
 
 @app.get("/health")
 async def health():

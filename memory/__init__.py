@@ -1050,7 +1050,16 @@ class MemoryManager:
                 role_label = "用户" if msg["role"] == "user" else "AI"
                 context_parts.append(f"{role_label}: {msg['content']}")
         
-        return "\n".join(context_parts) if context_parts else ""
+        out = "\n".join(context_parts) if context_parts else ""
+        try:
+            from runtime.logging_setup import logger_mem
+            logger_mem.info(
+                f"[retrieve] user={user_id} char={character_id} query={query[:80]!r} "
+                f"chars={len(out)}"
+            )
+        except Exception:
+            pass
+        return out
     
     def get_recent_history(self, user_id: str, limit: int = 10, char_id: str = "") -> List[dict]:
         """获取最近对话历史"""
@@ -1142,6 +1151,13 @@ class MemoryManager:
             metadata=metadata or {},
             memory_type="long_term",
         )
+        try:
+            from runtime.logging_setup import logger_mem
+            from runtime.db import unified_store
+            logger_mem.info(f"[write] user={user_id} char={char_id} long: {fact[:120]}")
+            unified_store.record_memory(user_id, char_id, "long", fact, weight=0.9, source="manual")
+        except Exception:
+            pass
 
     # ============ 双记忆层：长/短记忆 + 遗忘 + 高频转长 ============
 
@@ -1176,6 +1192,13 @@ class MemoryManager:
                           "explicit": 1, "first_seen": now0, "last_seen": now0},
                 memory_type="long_term",
             )
+            try:
+                from runtime.logging_setup import logger_mem
+                from runtime.db import unified_store
+                logger_mem.info(f"[write] user={user_id} char={char_id} long: {text[:120]}")
+                unified_store.record_memory(user_id, char_id, "long", text, weight=0.9, source="model")
+            except Exception:
+                pass
         for item in (short_items or []):
             if isinstance(item, str):
                 text, weight = item.strip(), MEM_INITIAL_WEIGHT
@@ -1189,6 +1212,13 @@ class MemoryManager:
             if len(text) < 4:
                 continue
             self._store_short(store, text, weight)
+            try:
+                from runtime.logging_setup import logger_mem
+                from runtime.db import unified_store
+                logger_mem.info(f"[write] user={user_id} char={char_id} short(w={weight}): {text[:120]}")
+                unified_store.record_memory(user_id, char_id, "short", text, weight=weight, source="model")
+            except Exception:
+                pass
         store._save()
 
     def _store_short(self, store: "VectorStore", text: str, weight: float, explicit: int = 0):

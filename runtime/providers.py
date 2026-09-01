@@ -27,6 +27,8 @@ class ProviderKind(str, enum.Enum):
     EMBEDDING = "embedding"             # 向量化
     TOOL = "tool"                       # 工具/搜索执行
     MEMORY = "memory"                   # 记忆（分层检索：bag-of-words / embedding）
+    AVATAR = "avatar"                   # 头像（Live2D / VRC / 未来 3D）
+    PLATFORM = "platform"               # 消息平台（微信 / Telegram / Discord / 预留）
 
 
 @dataclass

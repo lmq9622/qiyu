@@ -61,6 +61,19 @@ class MemoryProvider(AIProvider):
 
         返回 [{text, score, ...}]；失败返回 []（调用方自行兜底）。
         """
+        import time as _t
+        _t0 = _t.time()
+        try:
+            return await self._retrieve_inner(user_id, query, char_id, top_k)
+        finally:
+            try:
+                from runtime.perf import perf_monitor
+                perf_monitor.record("memory_retrieve", value=(_t.time() - _t0) * 1000.0)
+            except Exception:
+                pass
+
+    async def _retrieve_inner(self, user_id: str, query: str, char_id: str = "",
+                              top_k: int = 5) -> list:
         if self._mem is None:
             return []
         try:
@@ -88,7 +101,16 @@ class MemoryProvider(AIProvider):
                 return scored[:top_k]
             except Exception as e:
                 logger.warning(f"[Memory] embedding 重排失败，保留 bag-of-words 结果: {e}")
-        return store.search(query, top_k=top_k)
+        out = store.search(query, top_k=top_k)
+        try:
+            from runtime.logging_setup import logger_mem
+            logger_mem.info(
+                f"[retrieve] user={user_id} char={char_id} query={query[:80]!r} "
+                f"hits={len(out)} backend={self.probe().backend}"
+            )
+        except Exception:
+            pass
+        return out
 
     def context(self, user_id: str, query: str, char_id: str = "", top_k: int = 5) -> str:
         """返回给提示词用的上下文文本（生产路径：bag-of-words，与旧行为一致）。"""

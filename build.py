@@ -21,7 +21,7 @@ ICON_FILE = PROJECT_ROOT / "assets" / "icon.ico"  # 如果有图标的话
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 SPEC_FILE = PROJECT_ROOT / f"{OUTPUT_NAME}.spec"
-VERSION = "0.0.18"   # M5 打包版本（每次打包顺延 +0.0.1）
+VERSION = "0.0.19"   # M6 打包版本（每次打包顺延 +0.0.1）
 
 # ============ 检查环境 ============
 def check_env():
@@ -187,6 +187,24 @@ def build():
         "runtime.realtime",
         "runtime.memory",
         "runtime.toolagent",
+        # M6：Realtime Brain 多组件 / 视觉 / 语音 / Avatar / 平台 / DB / 日志 / 性能 / 并发（函数级惰性 import）
+        "runtime.logging_setup",
+        "runtime.perf",
+        "runtime.concurrency",
+        "runtime.benchmark",
+        "runtime.vision",
+        "runtime.stt",
+        "runtime.tts",
+        "runtime.embedding_provider",
+        "runtime.avatar",
+        "runtime.platform",
+        "runtime.db",
+        "runtime.main_brain",
+        "companion.pipeline",
+        # Tool Agent 联网工具箱（tools/ 目录被 .gitignore 忽略，必须显式收集）
+        "tools",
+        "tools.web",
+        "tools.install_models",
         # ClawBot 二维码生成（demo.py 运行时惰性导入，PyInstaller 静态分析不到）
         "qrcode",
         "PIL",
@@ -346,6 +364,27 @@ def create_sidecars():
         if not readme.exists():
             readme.write_text(note + "\n", encoding="utf-8")
         print(f"[OK] sidecar: {d}")
+    # M6：把模型安装器与联网工具箱放进 sidecar tools/（可独立更新）
+    try:
+        tool_srcs = [PROJECT_ROOT / "tools" / "web.py", PROJECT_ROOT / "tools" / "install_models.py"]
+        tools_dir = base / "tools"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        for _f in tool_srcs:
+            if _f.exists():
+                shutil.copy2(_f, tools_dir / _f.name)
+        print(f"[OK] sidecar tools: web.py / install_models.py 已复制")
+    except Exception as e:
+        print(f"[WARN] 复制 tools 工具失败: {e}")
+    # M6：models/ 说明安装器用法
+    try:
+        models_readme = base / "models" / "README.txt"
+        models_readme.write_text(
+            "本地模型目录（可独立更新）。\n"
+            "Realtime Brain（MiniMind-O）：运行 tools/install_models.py 下载 Thinker 权重到 models/realtime/。\n"
+            "Main Brain：把 GGUF 放到 models/main/（或配置远程 API）。\n",
+            encoding="utf-8")
+    except Exception as e:
+        print(f"[WARN] 写 models README 失败: {e}")
     # 用户可编辑配置副本（exe 启动时优先读 exe 同目录 config/）
     cfg_dir = base / "config"
     cfg_dir.mkdir(parents=True, exist_ok=True)

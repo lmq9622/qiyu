@@ -203,3 +203,15 @@ def transcribe_audio_file(path: str) -> str:
     except Exception as e:
         logger.debug(f"[语音] 本地文件识别失败: {e}")
         return ""
+def transcribe_voice_bytes(raw: bytes, ext: str = "silk") -> str:
+    """公开入口：把语音字节流转写为文本（供 STTProvider 统一接口调用）。
+
+    失败返回 ""，不抛异常；调用方应降级为 [语音]。
+    """
+    if not raw or not local_asr_available():
+        return ""
+    try:
+        return _transcribe_bytes(raw, ext)
+    except Exception as e:
+        logger.debug(f"[语音] 字节转写失败: {e}")
+        return ""

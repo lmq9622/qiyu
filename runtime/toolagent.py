@@ -64,6 +64,26 @@ class ToolAgent(AIProvider):
         # 可用性依赖运行时开关，实时探测
         return self.probe()
 
+    def _record(self, ev: ToolEvidence, tool: str) -> None:
+        """工具执行落账：分层日志(tool.log) + 统一 DB(tool_calls)。"""
+        try:
+            from runtime.logging_setup import logger_tool
+            logger_tool.info(
+                f"[ToolAgent] {tool} | query={ev.query[:120]!r} | "
+                f"success={ev.success} items={len(ev.items)} backend={ev.backend}"
+            )
+        except Exception:
+            pass
+        try:
+            from runtime.db import unified_store
+            unified_store.record_tool_call(
+                "web_user", "", tool, ev.query, success=ev.success,
+                latency_ms=0.0,
+                evidence={"items": [it.get("url") or it.get("image_url") or "" for it in ev.items[:6]]},
+            )
+        except Exception:
+            pass
+
     async def _plan(self, query: str) -> list:
         if self.planner is None:
             return [query[:80]]
@@ -100,7 +120,9 @@ class ToolAgent(AIProvider):
                 results = hot[:4] or []
             except Exception as e:
                 logger.warning(f"[ToolAgent] 热门兜底失败: {e}")
-        return ToolEvidence(bool(results), results[:6], query, backend="web")
+        ev = ToolEvidence(bool(results), results[:6], query, backend="web")
+        self._record(ev, "search")
+        return ev
 
     async def search_images(self, query: str) -> ToolEvidence:
         """真实搜图：返回 [{title, url, image_url}]；没找到就如实说没有，绝不假装拍图。"""
@@ -123,7 +145,9 @@ class ToolAgent(AIProvider):
                 logger.warning(f"[ToolAgent] 搜图失败 {kw}: {e}")
             if len(out) >= 3:
                 break
-        return ToolEvidence(bool(out), out[:3], query, backend="image")
+        ev = ToolEvidence(bool(out), out[:3], query, backend="image")
+        self._record(ev, "image_search")
+        return ev
 
 
 tool_agent = ToolAgent()

@@ -93,6 +93,14 @@ def _register_schedule(user_id: str, task: dict):
     # 只保留 48 小时内未完成任务，防止无限堆积
     _schedules_store[user_id] = [t for t in tasks if (not t.get("done") or t.get("created_at", 0) > time.time() - 172800)]
     _save_schedules()
+    try:
+        from runtime.db import unified_store
+        unified_store.record_task(
+            user_id, (task.get("payload") or {}).get("char_id") or "",
+            str(task.get("kind") or "task"), (task.get("payload") or {}),
+            due_at=float(task.get("due_at") or 0))
+    except Exception:
+        pass
     logger.info(f"[调度] {user_id} 注册 {task['kind']} @ {time.strftime('%m-%d %H:%M', time.localtime(task['due_at']))}")
 
 def _cancel_nudge(user_id: str, char_id: str = ""):
