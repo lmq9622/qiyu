@@ -22,7 +22,7 @@ letta_backend = get_letta_backend()
 channel_registry = get_channel_registry()
 
 
-from companion.constants import LEVEL_LABEL, LEVEL_PCT, PEER_ROLE_PROMPT
+from companion.constants import _SEARCH_CLAIM_RE, LEVEL_LABEL, LEVEL_PCT, PEER_ROLE_PROMPT
 from companion.state import LLM_MODEL, LLM_ROUTE_URL, LLM_URL, _EVIDENCE_CACHE
 from companion.models import _msg_text, parse_chat_messages
 from companion.settings import _apply_thinking_kwargs, _current_time_block, _desire_block, _desire_value, _is_longform_request, _persona_profile, _route_llm_info, _user_gender_block, _user_network_context, build_resume_prompt, is_injection, load_runtime_settings
@@ -527,6 +527,35 @@ class LLMClient(MainBrainProvider):
         if re.search(r'"messages"\s*:\s*\[\s*\]', raw or ""):
             return []
         msgs = parse_chat_messages(raw)["messages"]
+        if not success and not images:
+            # 硬护栏：失败分支绝对禁止声称"找到了/发你了/发链接"——逐条过滤，
+            # 模型编造真实结果里不存在的链接也整条丢弃；全被滤掉就给一句诚实的兜底。
+            real_urls = {str(it.get("url") or "").rstrip("/") for it in (results or [])}
+            kept = []
+            for _m in msgs:
+                t = (_m.get("text") or "").strip()
+                if not t:
+                    continue
+                # 声称词被"没/不/未"否定的（没搜到/没查到/发不出去）是诚实回答，放行
+                _negated = False
+                for _cm in _SEARCH_CLAIM_RE.finditer(t):
+                    _seg = t[max(0, _cm.start() - 3):_cm.start()]
+                    if not re.search(r"(没|不|未|无)\s*$", _seg):
+                        _negated = True
+                        break
+                if _negated:
+                    continue
+                # 编造真实结果里不存在的链接 → 整条丢弃
+                for _u in re.findall(r"https?://[^\s，。、|\n]+", t):
+                    if _u.rstrip("/") not in real_urls:
+                        _negated = True
+                        break
+                if _negated:
+                    continue
+                kept.append(_m)
+            msgs = kept
+            if not msgs:
+                msgs = [{"text": "没查到，你自己搜下试试？", "type": "statement", "delay": 0}]
         if images and msgs:
             # 真实图片挂到第一条消息上，前端渲染为图片消息（图片是真实搜索结果，不是模型编的）
             msgs[0] = {**msgs[0], "image_url": (images[0].get("image_url") or "")[:1000]}
