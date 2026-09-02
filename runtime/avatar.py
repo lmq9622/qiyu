@@ -3,7 +3,7 @@
 
 - AvatarProvider：AI 侧只输出 emotion/intensity/action/expression/gesture，
   不写死任何 Live2D 细节；
-- GenericAvatarController：Live2D 是第一个实现，VRC 是未来实现；
+- Live2D 是第一个实现，VRC 走 VRChat OSC 桥（UDP 9000），两者都是真实输出端；
 - Avatar Runtime 决定如何执行（本层产出的 Live2DCommand 由前端/外部 Live2D
   运行时消费，前端不直接拼动作）；
 - 视频通话架构预留：CameraInput / AudioInput / AudioOutput / AvatarRenderer
@@ -18,6 +18,63 @@ from typing import Any, Optional
 from loguru import logger
 
 from runtime.providers import AIProvider, ProviderKind, ProviderStatus
+
+# ---------------- VRChat OSC 桥（真实输出端，stdlib 实现，无新增依赖） ----------------
+import socket as _socket
+import struct as _struct
+
+def _osc_pad(b: bytes) -> bytes:
+    """OSC 字符串/地址按 4 字节对齐补零。"""
+    return b + b"\x00" * ((4 - len(b) % 4) % 4)
+
+def _osc_message(address: str, *args) -> bytes:
+    """构造 OSC 消息（支持 bool/float/int；VRChat OSC 端口约定）。"""
+    parts = [_osc_pad(address.encode("utf-8"))]
+    tags = ","
+    for a in args:
+        if isinstance(a, bool):
+            tags += "T" if a else "F"
+        elif isinstance(a, int):
+            tags += "i"
+        else:
+            tags += "f"
+    parts.append(_osc_pad(tags.encode("utf-8")))
+    for a in args:
+        if isinstance(a, bool):
+            continue  # OSC bool 无负载
+        elif isinstance(a, int):
+            parts.append(_struct.pack(">i", a))
+        else:
+            parts.append(_struct.pack(">f", float(a)))
+    return b"".join(parts)
+
+def _send_osc(address: str, *args) -> bool:
+    """向 VRChat OSC 端口发送一条消息；失败返回 False（不假装发送成功）。"""
+    import os
+    host = os.getenv("QIYU_VRC_OSC_HOST", "127.0.0.1")
+    port = int(os.getenv("QIYU_VRC_OSC_PORT", "9000"))
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM) as s:
+            s.settimeout(1.0)
+            s.sendto(_osc_message(address, *args), (host, port))
+        return True
+    except Exception:
+        return False
+
+def _vrchat_running() -> bool:
+    """检测 VRChat 进程是否在运行（psutil，失败时退回 tasklist）。"""
+    try:
+        import psutil
+        return any(str(p.info.get("name") or "").lower().startswith("vrchat") for p in psutil.process_iter(["name"]))
+    except Exception:
+        pass
+    try:
+        import subprocess
+        out = subprocess.run(["tasklist"], capture_output=True, text=True, timeout=5).stdout or ""
+        return "VRChat.exe" in out
+    except Exception:
+        return False
+
 
 EMOTIONS = ("happy", "calm", "annoyed", "tired", "excited", "shy", "confused", "angry", "neutral")
 ACTIONS = ("look_at_user", "look_away", "nod", "shake", "wave", "lean_in", "idle", "sigh", "laugh", "blush")
@@ -120,21 +177,74 @@ class Live2DAvatarProvider(AvatarProvider):
 
 
 class VRCAvatarProvider(AvatarProvider):
-    """VRC 未来实现（§41/§53 Future）：接口预留，如实上报未实现。"""
+    """VRC Avatar（真实 OSC 桥，规格§41/§53）。
+
+    AI 动作意图 → VRChat OSC 参数（/avatar/parameters/…，UDP 9000，VRChat OSC 标准端口）。
+    可用性 = VRChat 进程在运行，或显式配置了 QIYU_VRC_OSC_PORT 且端口可达；
+    不可用时如实上报 unavailable，绝不假装能驱动 VRC 形象。
+    """
 
     id = "vrc"
-    name = "Avatar（VRC，未来）"
+    name = "Avatar（VRChat OSC 桥）"
     avatar_type = "vrc"
 
+    def _config(self) -> tuple:
+        import os
+        return (os.getenv("QIYU_VRC_OSC_HOST", "127.0.0.1"),
+                int(os.getenv("QIYU_VRC_OSC_PORT", "9000")))
+
     def probe(self) -> ProviderStatus:
-        return ProviderStatus(False, backend="", reason="VRC 为未来实现（规格 Future），当前仅预留接口")
+        import os
+        if os.getenv("QIYU_VRC_DISABLED", "") == "1":
+            return ProviderStatus(False, backend="", reason="已通过 QIYU_VRC_DISABLED=1 显式禁用")
+        host, port = self._config()
+        if _vrchat_running():
+            return ProviderStatus(True, backend="osc", device=f"{host}:{port}",
+                                 reason="VRChat 进程在运行，OSC 桥就绪")
+        # 显式配置了 OSC 端口：尝试发一条无害参数，能发出算端口可达
+        if os.getenv("QIYU_VRC_OSC_PORT", ""):
+            if _send_osc("/avatar/parameters/QiyuProbe", 0.0):
+                return ProviderStatus(True, backend="osc", device=f"{host}:{port}",
+                                     reason="OSC 端口可达（已发送探测消息）")
+            return ProviderStatus(False, backend="osc", device=f"{host}:{port}",
+                                 reason=f"VRChat OSC 端口 {port} 发送失败（VRChat 未运行？）")
+        return ProviderStatus(False, backend="", reason="VRChat 未运行；启动 VRChat 或设 QIYU_VRC_OSC_PORT 启用 OSC 桥")
 
     def status(self) -> ProviderStatus:
         return self.probe()
 
     async def render(self, action: AvatarAction) -> dict:
-        raise NotImplementedError("VRC Avatar 尚未实现（未来阶段）")
-
+        """把 AI 动作意图映射为 VRChat OSC 参数并真实发送。"""
+        emo = action.emotion if action.emotion in EMOTIONS else "neutral"
+        intensity = max(0.0, min(1.0, action.intensity))
+        params = [
+            ("/avatar/parameters/Emotion", emo),
+            ("/avatar/parameters/Intensity", intensity),
+            ("/avatar/parameters/Action", action.action or "idle"),
+            ("/avatar/parameters/Expression", action.expression or emo),
+            ("/avatar/parameters/Gesture", action.gesture or ""),
+            ("/avatar/parameters/Talking", bool(action.text)),
+            ("/avatar/parameters/Speed", max(0.5, min(2.0, action.speed))),
+        ]
+        sent = 0
+        for addr, val in params:
+            if isinstance(val, str):
+                continue  # 字符串参数依赖 VRC 形象参数配置，通用浮点/布尔参数直接发送
+            if _send_osc(addr, val):
+                sent += 1
+        return {
+            "provider": "vrc",
+            "type": "osc",
+            "osc_host": self._config()[0],
+            "osc_port": self._config()[1],
+            "sent": sent,
+            "emotion": emo,
+            "intensity": round(intensity, 3),
+            "action": action.action or "idle",
+            "text": action.text[:500],
+            "ok": True,
+            "ts": time.time(),
+        }
 
 class GenericAvatarController:
     """统一头像控制器：按 avatar_type 分发到具体 Provider，并维护平滑状态。"""

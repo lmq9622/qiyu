@@ -70,7 +70,10 @@ class WindowsSapiTTSProvider(AIProvider):
             f"$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
             f"$s.Rate = {max(-10, min(10, rate))}; "
             + (f"$s.SelectVoice('{voice}'); " if voice else "")
-            + f"$s.SetOutputToWaveFile('{out_path}'); "
+            + "$fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo("
+            "16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, "
+            "[System.Speech.AudioFormat.AudioChannel]::Mono); "
+            + f"$s.SetOutputToWaveFile('{out_path}', $fmt); "
             f"$s.Speak('{_ps_escape(text)}'); $s.Dispose()"
         )
         t0 = time.time()
@@ -85,7 +88,7 @@ class WindowsSapiTTSProvider(AIProvider):
             dur = _wav_duration(out_path)
             from runtime.perf import perf_monitor
             perf_monitor.record("tts_first_packet", value=(time.time() - t0) * 1000.0)
-            return {"path": str(out_path), "format": "wav", "duration_ms": int(dur), "engine": "windows-sapi"}
+            return {"path": str(out_path), "format": "wav", "duration_ms": int(dur * 1000), "engine": "windows-sapi"}
         except Exception as e:
             logger.warning(f"[TTS] 合成异常: {e}")
             return None

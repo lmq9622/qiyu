@@ -110,11 +110,8 @@ class MiniMindModel:
 
 
 def _default_model_root() -> Path:
-    try:
-        from companion.state import get_resource_path
-        return Path(get_resource_path()) / "models" / "realtime"
-    except Exception:
-        return Path(__file__).resolve().parent.parent / "models" / "realtime"
+    from runtime import get_models_dir
+    return get_models_dir("realtime")
 
 
 def discover_models(root: Optional[Path] = None) -> MiniMindModel:
@@ -177,8 +174,13 @@ def _load_model(backend: str, model_file: str, device: str = ""):
             )
 
             async def gen(text: str, max_tokens: int = 64) -> str:
-                out = llm.create_completion(text, max_tokens=max_tokens, temperature=0.6,
-                                            stop=["\n", "</s>", "<|im_end|>"])
+                # MiniMind2 使用 ChatML 模板（tokenizer_config: bos=<|im_start|>, eos=<|im_end|>）
+                prompt = (
+                    "<|im_start|>system\n你是实时陪伴大脑 MiniMind，按用户要求简洁输出。<|im_end|>\n"
+                    f"<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n"
+                )
+                out = llm.create_completion(prompt, max_tokens=max_tokens, temperature=0.6,
+                                            stop=["<|im_end|>"])
                 return (out.get("choices") or [{}])[0].get("text") or ""
 
             return gen

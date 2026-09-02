@@ -26,23 +26,41 @@ _engine_lock = threading.Lock()
 
 
 def _model_dir() -> str:
-    """模型目录：优先环境变量 QIYU_ASR_MODEL，其次 data/asr 下的模型目录"""
+    """模型目录：优先环境变量 QIYU_ASR_MODEL，其次 models/asr，再其次 data/asr"""
     env = os.environ.get("QIYU_ASR_MODEL", "").strip()
     if env and os.path.isdir(env):
         return env
+    candidates = []
+    try:
+        from runtime import get_models_dir
+        candidates.append(get_models_dir("asr"))
+    except Exception:
+        candidates.append(Path(__file__).resolve().parent.parent / "models" / "asr")
     try:
         from pathutil import get_data_dir
-        base = get_data_dir() / "asr"
+        candidates.append(get_data_dir() / "asr")
     except Exception:
-        base = Path(__file__).resolve().parent.parent / "data" / "asr"
-    if not base.exists():
-        return ""
-    for sub in sorted(base.iterdir()):
-        if sub.is_dir() and (sub / "encoder.onnx").exists() or (sub / "model.onnx").exists():
-            return str(sub)
-    # 直接放在 data/asr 下
-    if (base / "encoder.onnx").exists() or (base / "model.onnx").exists():
-        return str(base)
+        candidates.append(Path(__file__).resolve().parent.parent / "data" / "asr")
+    for base in candidates:
+        if not base.exists():
+            continue
+        for sub in sorted(base.iterdir()):
+            if sub.is_dir() and _asr_model_file(sub):
+                return str(sub)
+        # 直接放在目录下
+        if _asr_model_file(base):
+            return str(base)
+    return ""
+
+
+def _asr_model_file(md) -> str:
+    """识别可加载的模型文件：paraformer 双文件(encoder/decoder) 或单文件(model/model.int8)。"""
+    md = Path(md)
+    if (md / "encoder.onnx").exists() and (md / "decoder.onnx").exists():
+        return "paraformer"
+    for fname in ("model.int8.onnx", "model.onnx"):
+        if (md / fname).exists():
+            return str(md / fname)
     return ""
 
 
@@ -68,11 +86,18 @@ def _get_engine():
                 logger.info("[语音] 未找到 sherpa-onnx 模型目录（可设 QIYU_ASR_MODEL 指向模型目录）")
                 _engine = None
                 return None
-            _engine = sherpa_onnx.OfflineRecognizer.from_paraformer(
-                encoder=os.path.join(md, "encoder.onnx"),
-                decoder=os.path.join(md, "decoder.onnx"),
-                tokens=os.path.join(md, "tokens.txt"),
-            )
+            mfile = _asr_model_file(md)
+            if mfile == "paraformer":
+                _engine = sherpa_onnx.OfflineRecognizer.from_paraformer(
+                    encoder=os.path.join(md, "encoder.onnx"),
+                    decoder=os.path.join(md, "decoder.onnx"),
+                    tokens=os.path.join(md, "tokens.txt"),
+                )
+            else:
+                _engine = sherpa_onnx.OfflineRecognizer.from_paraformer(
+                    paraformer=mfile,
+                    tokens=os.path.join(md, "tokens.txt"),
+                )
             logger.success("[语音] 本地 ASR（sherpa-onnx paraformer-zh）就绪")
         except Exception as e:
             logger.warning(f"[语音] 本地 ASR 初始化失败（不影响聊天）: {e}")

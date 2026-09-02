@@ -4,7 +4,7 @@
 Companion Core 不直接写 Wechaty 专属代码：统一
 - IncomingMessage（平台输入统一转换）
 - OutgoingMessage（平台输出统一）
-- MessagePlatformProvider：WeChatProvider（现在）/ TelegramProvider / DiscordProvider（未来）
+- MessagePlatformProvider：WeChatProvider（现在）/ TelegramProvider / DiscordProvider（真实实现）
 
 业务层只依赖 MessagePlatformProvider 接口；新平台（Telegram/Discord/QQ）按同一
 接口注册即可，核心逻辑零改动。
@@ -126,37 +126,159 @@ class WeChatPlatformProvider(MessagePlatformProvider):
 
 
 class TelegramPlatformProvider(MessagePlatformProvider):
-    """Telegram（未来，§46/§53）：接口预留。"""
+    """Telegram Bot API（真实实现，规格§46/§53）。
+
+    token 来源：环境变量 TELEGRAM_BOT_TOKEN（优先）或运行时设置 telegram_bot_token。
+    probe() 用 getMe 验证 token；send() 真实发送 sendMessage/sendPhoto；
+    API 地址可经 TELEGRAM_API_BASE 覆盖（代理/自建网关/测试）。
+    """
 
     id = "telegram"
-    name = "消息平台（Telegram，未来）"
+    name = "消息平台（Telegram Bot API）"
     platform_id = "telegram"
 
+    def __init__(self):
+        super().__init__()
+        self._bot_info: Optional[dict] = None
+
+    def _token(self) -> str:
+        import os
+        tok = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if tok:
+            return tok
+        try:
+            from companion.settings import load_runtime_settings
+            return str(load_runtime_settings().get("telegram_bot_token") or "").strip()
+        except Exception:
+            return ""
+
+    def _api_base(self) -> str:
+        import os
+        return os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/")
+
     def probe(self) -> ProviderStatus:
-        return ProviderStatus(False, backend="", reason="Telegram 为未来实现（接口已预留）")
+        tok = self._token()
+        if not tok:
+            return ProviderStatus(False, backend="", reason="未配置 Telegram Bot Token（设 TELEGRAM_BOT_TOKEN）")
+        try:
+            import httpx
+            r = httpx.get(f"{self._api_base()}/bot{tok}/getMe", timeout=10)
+            data = r.json() if r.status_code == 200 else {}
+            if r.status_code == 200 and data.get("ok"):
+                self._bot_info = data.get("result") or {}
+                uname = self._bot_info.get("username") or "?"
+                return ProviderStatus(True, backend="api", device=f"@{uname}",
+                                     reason="Telegram Bot API getMe 验证通过")
+            return ProviderStatus(False, backend="api", reason=f"getMe 验证失败（HTTP {r.status_code}）")
+        except Exception as e:
+            return ProviderStatus(False, backend="api", reason=f"Telegram API 不可达（{type(e).__name__}）")
 
     def status(self) -> ProviderStatus:
         return self.probe()
 
     async def send(self, msg: OutgoingMessage) -> bool:
-        return False
+        tok = self._token()
+        if not tok or not msg.to_user:
+            return False
+        text = (msg.text or "").strip()
+        pieces = [p for p in (msg.pieces or []) if (p.get("text") or "").strip()]
+        if pieces and not text:
+            text = "\n".join(p.get("text", "").strip() for p in pieces)
+        try:
+            import httpx
+            base = self._api_base()
+            async with httpx.AsyncClient(timeout=20) as client:
+                if msg.image_url:
+                    r = await client.post(f"{base}/bot{tok}/sendPhoto", json={
+                        "chat_id": msg.to_user, "photo": msg.image_url, "caption": text[:1024]})
+                    if r.status_code == 200:
+                        return True
+                r = await client.post(f"{base}/bot{tok}/sendMessage", json={
+                    "chat_id": msg.to_user, "text": text[:4096]})
+                return r.status_code == 200
+        except Exception as e:
+            logger.warning(f"[平台] Telegram 发送失败: {e}")
+            return False
+
+    def list_channels(self) -> list[dict]:
+        if not self._bot_info:
+            return []
+        uname = self._bot_info.get("username") or ""
+        return [{"id": f"@{uname}", "name": f"Telegram Bot @{uname}"}] if uname else []
 
 
 class DiscordPlatformProvider(MessagePlatformProvider):
-    """Discord（未来，§46/§53）：接口预留。"""
+    """Discord Bot API（真实实现，规格§46/§53）。
+
+    token 来源：环境变量 DISCORD_BOT_TOKEN（优先）或运行时设置 discord_bot_token。
+    probe() 用 GET /users/@me 验证 token；send() 真实发送到频道/私信（to_user=channel_id）；
+    API 地址可经 DISCORD_API_BASE 覆盖（代理/自建网关/测试）。
+    """
 
     id = "discord"
-    name = "消息平台（Discord，未来）"
+    name = "消息平台（Discord Bot API）"
     platform_id = "discord"
 
+    def __init__(self):
+        super().__init__()
+        self._bot_info: Optional[dict] = None
+
+    def _token(self) -> str:
+        import os
+        tok = os.getenv("DISCORD_BOT_TOKEN", "").strip()
+        if tok:
+            return tok
+        try:
+            from companion.settings import load_runtime_settings
+            return str(load_runtime_settings().get("discord_bot_token") or "").strip()
+        except Exception:
+            return ""
+
+    def _api_base(self) -> str:
+        import os
+        return os.getenv("DISCORD_API_BASE", "https://discord.com/api/v10").rstrip("/")
+
     def probe(self) -> ProviderStatus:
-        return ProviderStatus(False, backend="", reason="Discord 为未来实现（接口已预留）")
+        tok = self._token()
+        if not tok:
+            return ProviderStatus(False, backend="", reason="未配置 Discord Bot Token（设 DISCORD_BOT_TOKEN）")
+        try:
+            import httpx
+            r = httpx.get(f"{self._api_base()}/users/@me",
+                          headers={"Authorization": f"Bot {tok}"}, timeout=10)
+            if r.status_code == 200:
+                self._bot_info = r.json()
+                return ProviderStatus(True, backend="api", device=self._bot_info.get("username") or "",
+                                     reason="Discord API 身份验证通过（/users/@me）")
+            return ProviderStatus(False, backend="api", reason=f"Discord 身份验证失败（HTTP {r.status_code}）")
+        except Exception as e:
+            return ProviderStatus(False, backend="api", reason=f"Discord API 不可达（{type(e).__name__}）")
 
     def status(self) -> ProviderStatus:
         return self.probe()
 
     async def send(self, msg: OutgoingMessage) -> bool:
-        return False
+        tok = self._token()
+        if not tok or not msg.to_user:
+            return False
+        text = (msg.text or "").strip()
+        pieces = [p for p in (msg.pieces or []) if (p.get("text") or "").strip()]
+        if pieces and not text:
+            text = "\n".join(p.get("text", "").strip() for p in pieces)
+        try:
+            import httpx
+            headers = {"Authorization": f"Bot {tok}"}
+            async with httpx.AsyncClient(timeout=20) as client:
+                r = await client.post(f"{self._api_base()}/channels/{msg.to_user}/messages",
+                                      json={"content": text[:2000]}, headers=headers)
+                return r.status_code in (200, 201)
+        except Exception as e:
+            logger.warning(f"[平台] Discord 发送失败: {e}")
+            return False
+
+    def list_channels(self) -> list[dict]:
+        # 频道列表需要 gateway/intents，保持诚实：不伪造
+        return []
 
 
 class MessagePlatformRegistry:

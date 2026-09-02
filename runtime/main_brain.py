@@ -21,11 +21,8 @@ from runtime.providers import MainBrainProvider, ProviderStatus
 
 
 def _default_models_dir() -> Path:
-    try:
-        from companion.state import get_resource_path
-        base = Path(get_resource_path()) / "models" / "main"
-    except Exception:
-        base = Path(__file__).resolve().parent.parent / "models" / "main"
+    from runtime import get_models_dir
+    base = get_models_dir("main")
     base.mkdir(parents=True, exist_ok=True)
     return base
 

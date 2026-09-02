@@ -102,9 +102,10 @@ def download(url: str, dest: Path, expect_size_mb: float = 0.0) -> bool:
 
 DEFAULT_REALTIME_URLS = [
     # MiniMind2-gguf 文本实时大脑（llama.cpp 可跑）；若官方文件名变化导致 404，用 --url 指定直链。
-    "https://huggingface.co/jingyaogong/MiniMind2-gguf/resolve/main/MiniMind2-small-0.1B-Q4_K_M.gguf",
-    "https://huggingface.co/jingyaogong/MiniMind2-gguf/resolve/main/MiniMind2-0.1B-Q4_K_M.gguf",
-    "https://modelscope.cn/models/jingyaogong/MiniMind2-gguf/resolve/master/MiniMind2-small-0.1B-Q4_K_M.gguf",
+    "https://huggingface.co/jingyaogong/MiniMind2-gguf/resolve/main/Q4-MiniMind2-Small.gguf",
+    "https://huggingface.co/jingyaogong/MiniMind2-gguf/resolve/main/MiniMind2-Small.gguf",
+    "https://huggingface.co/jingyaogong/MiniMind2-gguf/resolve/main/Q4-MiniMind2.gguf",
+    "https://modelscope.cn/models/jingyaogong/MiniMind2-gguf/resolve/master/Q4-MiniMind2-Small.gguf",
 ]
 
 
@@ -126,6 +127,33 @@ def install_realtime(url: str = "") -> bool:
     return False
 
 
+DEFAULT_ASR_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    "sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2"
+)
+
+
+def install_asr() -> bool:
+    """下载 sherpa-onnx paraformer-zh 小模型到 models/asr/（真实 ASR，STT Provider 使用）。"""
+    import tarfile
+    from runtime import get_models_dir
+    dest_dir = get_models_dir("asr")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    tmp = dest_dir / "sherpa-onnx-paraformer-zh-small.tar.bz2"
+    if not download(DEFAULT_ASR_URL, tmp, expect_size_mb=60):
+        print("[ERR] ASR 模型下载失败，请手动下载 sherpa-onnx-paraformer-zh-small 放到 models/asr/")
+        return False
+    try:
+        with tarfile.open(tmp, "r:bz2") as tf:
+            tf.extractall(dest_dir)
+        tmp.unlink(missing_ok=True)
+        print(f"[OK] ASR 模型安装完成: {dest_dir}")
+        return True
+    except Exception as e:
+        print(f"[ERR] ASR 模型解压失败: {e}")
+        return False
+
+
 def install_main(url: str) -> bool:
     from runtime.main_brain import _default_models_dir
     dest_dir = _default_models_dir()
@@ -141,6 +169,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Qiyu 模型安装器")
     ap.add_argument("--check", action="store_true", help="检测环境并给出推荐")
     ap.add_argument("--realtime", action="store_true", help="下载 Realtime Brain（MiniMind GGUF）")
+    ap.add_argument("--asr", action="store_true", help="下载 STT 模型（sherpa-onnx paraformer-zh）到 models/asr/")
     ap.add_argument("--main", metavar="URL", default="", help="下载本地主模型 GGUF 到 models/main/")
     ap.add_argument("--url", default="", help="指定直链（配合 --realtime）")
     args = ap.parse_args()
@@ -148,6 +177,8 @@ def main() -> int:
         return check()
     if args.realtime:
         return 0 if install_realtime(args.url) else 1
+    if args.asr:
+        return 0 if install_asr() else 1
     if args.main:
         return 0 if install_main(args.main) else 1
     ap.print_help()

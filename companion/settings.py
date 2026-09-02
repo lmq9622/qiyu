@@ -132,6 +132,8 @@ DEFAULT_RUNTIME_SETTINGS = {
     "day_memory_enabled": True,
     "night_memory_enabled": True,
     "vision_supported": False,
+    "telegram_bot_token": "",
+    "discord_bot_token": "",
     "uncensored": False,
     "user_location": "",
     "user_gender": "",

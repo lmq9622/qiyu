@@ -250,14 +250,23 @@ class HardwareDetector:
                 vram_mb=prof.vram_mb, text=True, vision=True, audio=False,
                 realtime_audio=False, available=True,
             ))
-        # Vulkan（跨 NVIDIA/AMD/Intel；可用性还取决于模型后端是否实现）
+        # Vulkan（跨 NVIDIA/AMD/Intel；真实探测 llama.cpp Vulkan 后端是否可用）
         if prof.vulkan_available:
+            vulkan_ok = False
+            vulkan_reason = "Vulkan 驱动存在，但 Vulkan 推理后端不可用（未安装带 Vulkan 的 llama-cpp-python）"
+            try:
+                import llama_cpp
+                if llama_cpp.llama_supports_gpu_offload() and llama_cpp.llama_max_devices() > 0:
+                    vulkan_ok = True
+                    vulkan_reason = ""
+            except Exception as _e:
+                vulkan_reason = f"Vulkan 推理后端不可用（{type(_e).__name__}）"
             caps.append(BackendCapability(
                 backend="vulkan", device=prof.gpu_name or "vulkan-device",
                 vendor=prof.gpu_vendor, vram_mb=prof.vram_mb,
                 text=True, vision=True, audio=False, realtime_audio=False,
-                available=False,
-                reason="Vulkan 驱动存在，但当前分发未内置 Vulkan 推理后端",
+                available=vulkan_ok,
+                reason=vulkan_reason,
             ))
         # CPU：永远可用（Zero Setup 底线），文本能力可靠
         caps.append(BackendCapability(
