@@ -683,3 +683,11 @@
 - **修复**：status dict 里被塞入运行时对象导致 /v1/runtime/status 500 的 bug（runtime 字段字符串化）。
 - **模型安装器**：`tools/install_models.py` 新增 `--omni [--moe]`（ModelScope 下载 `gongjy/minimind-3o` 到 `models/realtime/minimind-3o/`），check/detect/recommend 同步更新；`.gitignore` 忽略权重文件；`models/README.md` 更新说明。
 - **验证**：真实加载 113.1M 参数 CPU 推理 TTFT 44–146ms / tok/s 20–28；RuntimeManager 集成 provider=minimindo-omni、backend=cpu、measured=True；完整服务隔离启动（QIYU_PORT=8773 + 隔离 QIYU_DATA_DIR）端点冒烟全绿，judge 不可解析时如实回退 Main Brain 并在 reason 附模型原文（不假装实时处理）；`python -m compileall` 全绿。
+
+### M9 P0.5 收尾：并发限流 / 批量待发队列 / Thinking 分离 / 工具硬护栏 / 讲故事轻唤（本次）
+- **M9a 全局并发限流（规格§25）**：`runtime/concurrency.py` 的 `GlobalConcurrencyLimiter` 落地并全链路接入——设置支持 `auto/1/2/3/4/unlimited`，auto 按 CPU 核数/内存自动取 1~4；MainBrain(llm)/Tool/Memory/Vision/TTS/STT/Avatar 共享总闸 + 分类子闸（tool 联网类最保守，权重 0.4，避免真实搜索风暴）；demo 的 LLM 调用、后台任务、联网查证统一走 `limiter.slot(...)`；`/v1/concurrency` 上报 stats（limit/inflight/peak/kind_limits），7 种模式单测全过。
+- **M9a 多消息 pending 批量队列**：用户连续发多条时第一条立即开始生成，其余进 pending queue；下一次 prefill 把未处理消息合并成批量上下文一次性交给模型，不做逐条完整推理；端到端实测 3 条连发 = 2 次 prefill（不是 3 次）。
+- **M9a Thinking pipeline 修复（规格§54）**：thinking 失败不再让前端只显示“……”；reasoning 与 final response 严格分离，空正文自动降级 `no_thinking` 重试；彻底无内容时输出诚实兜底「（我这边好像没接住，你再说一遍？）」，不输出省略号。
+- **M9b ToolAgent 硬护栏（规格§54）**：工具真实失败/无结果时，LLM 生成阶段用声明正则拦截「找到了/已经发你了/伪链接」等虚假成功话术并强制重写；端到端验证失败搜索后不再出现假装成功的回复。
+- **M9c 讲故事轻唤（真人感）**：conv_state 新增 `story_check_sent/story_check_at`，用户回消息时复位；后台扫描对「讲故事/长内容后 150–1800s 听众没回、亲和≥25、每段故事最多一次、不重复排队」的会话排 `storycheck`；到点后若用户排队期间已回或故事已结束则跳过，否则用独立 story_check prompt 最多发 1 句轻唤（喂？/睡着了？/还醒着吗/那我先讲到这？），模型判断对方在忙/已睡可输出空 messages=不发；主动类 proactive/night/reminder/story_check 统一注入 RAG 知识上下文，顺着最近话题聊，不脱离资料库硬聊。
+- **M9 验证**：并发 7 模式单测通过；3 连发→2 prefill、thinking 空正文/省略号、工具护栏均端到端通过；story_e2e_live 隔离实例实测讲故事后 7 分钟未回 → 排 storycheck → 「轻唤已发送」并写入 chat_history，`story_check_sent` 置位且不重复排队；LLM 返回空 messages 时实测返回 [] 不发送；`python -m compileall` 全绿。

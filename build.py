@@ -21,7 +21,7 @@ ICON_FILE = PROJECT_ROOT / "assets" / "icon.ico"  # 如果有图标的话
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 SPEC_FILE = PROJECT_ROOT / f"{OUTPUT_NAME}.spec"
-VERSION = "0.0.21"   # M8 打包版本（每次打包顺延 +0.0.1）
+VERSION = "0.0.22"   # M9 打包版本（每次打包顺延 +0.0.1）
 
 # ============ 检查环境 ============
 def check_env():

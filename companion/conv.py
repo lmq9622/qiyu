@@ -48,6 +48,8 @@ def _conv_state(user_id: str, char_id: str) -> dict:
             "story_active": False,       # 正在讲故事（长文输出模式）
             "story_bubbles": 0,
             "story_started_at": 0,
+            "story_check_sent": False,   # 讲故事后是否已轻唤过对方（每段故事最多一次）
+            "story_check_at": 0,
         }
         _conv_store[k] = cs
     return cs
@@ -133,6 +135,9 @@ def _update_conv_state(user_id: str, char_id: str, event: str, parsed: dict | No
         cs["conv_state"] = "ACTIVE"
         cs["ended_at"] = 0
         cs["cooldown_until"] = 0
+        # 用户回来了：下段故事/长内容可再次触发"对方没回"轻唤
+        cs["story_check_sent"] = False
+        cs["story_check_at"] = 0
         # 上一轮的"未完成话题"：被正面回应/翻篇就解除；对方突然跳走就保留（供 abrupt 感知）
         if user_input:
             try:

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Qiyu 主动消息/调度/后台循环（从 demo.py 迁移，M1）。"""
 import re
+import random
 import asyncio
 import time
 import uuid
@@ -20,8 +21,8 @@ llm_client = None
 
 from companion.state import _proactive_store, _schedules_store, user_states
 from companion.settings import _apply_thinking_kwargs, _route_llm_info, load_runtime_settings
-from companion.relations import _save_proactive, _save_schedules
-from companion.conv import _check_unanswered, _context_gate, _conv_state, _event_similar_to_shared, _record_shared_event, _update_conv_state
+from companion.relations import _init_relation, _register_schedule, _save_proactive, _save_schedules
+from companion.conv import _check_unanswered, _context_gate, _conv_state, _event_similar_to_shared, _record_shared_event, _save_conv_store, _update_conv_state
 from companion.behavior import _topic_similarity
 from companion.scheduler import proactive_scheduler
 
@@ -403,6 +404,72 @@ async def _task_agent_search(user_id: str, char_id: str, query: str) -> dict:
     evidence = await tool_agent.search(query)
     return evidence.to_dict()
 
+def _maybe_schedule_story_check(user_id: str, char_id: str, now: float):
+    """讲故事/长内容后听众长时间没回：按关系与空闲时长决定是否轻唤一次（喂？/睡着了？）。
+    每段故事最多一次（story_check_sent 标记），避免打扰；关系太生疏或话题已翻篇则不触发。"""
+    try:
+        if not user_id or not char_id:
+            return
+        cs = _conv_state(user_id, char_id)
+        if not cs.get("story_active") or cs.get("story_check_sent"):
+            return
+        last_user = float(cs.get("last_user_at") or 0)
+        idle = now - last_user if last_user else 0.0
+        if not (150 <= idle <= 1800):
+            return
+        rel = _init_relation(user_id, char_id)
+        aff = int(rel.get("affinity", 50) or 50)
+        if aff < 25:
+            return
+        # 已有未执行的同类任务则不重复排队
+        for _t in list((_schedules_store.get(user_id) or [])):
+            if _t.get("kind") == "storycheck" and not _t.get("done"):
+                return
+        cs["story_check_sent"] = True
+        cs["story_check_at"] = now
+        _save_conv_store()
+        _register_schedule(user_id, {"kind": "storycheck", "due_at": now + random.uniform(4, 10),
+                                     "payload": {"char_id": char_id,
+                                                 "context": (cs.get("last_topic") or "")[:60],
+                                                 "scheduled_at": now}})
+        logger.info(f"[故事轻唤] {user_id}/{char_id} 讲故事后听众 {int(idle // 60)} 分钟没回，已排轻唤")
+    except Exception as e:
+        logger.warning(f"[故事轻唤] 调度失败: {e}")
+
+
+async def _fire_story_check(user_id: str, payload: dict):
+    """讲故事后对方半天没回 → 最多一句轻唤；用户已回/已冷场/没话说就跳过。"""
+    st = user_states.get(user_id)
+    char_id = (payload or {}).get("char_id") or ""
+    if st is None and not char_id:
+        return
+    if not char_id:
+        if st is None:
+            return
+        char_id = st.get("character_id", "")
+    if not char_id:
+        default_char = char_mgr.get_default()
+        char_id = default_char.id if default_char else ""
+        if st is not None:
+            st["character_id"] = char_id
+    if not char_id or not llm_client or not llm_client.available:
+        return
+    try:
+        cs = _conv_state(user_id, char_id)
+        sched_at = float((payload or {}).get("scheduled_at") or 0)
+        last_user = float(cs.get("last_user_at") or 0)
+        # 用户在排队期间已经回消息 / 故事状态已结束 → 不发
+        if last_user > sched_at or not cs.get("story_active"):
+            return
+        messages = await llm_client.generate_story_check(char_id, user_id, (payload or {}).get("context", ""))
+        if not messages:
+            return
+        await _send_active_messages(user_id, messages, "闲聊", reason="story_check", char_id=char_id)
+        logger.info(f"[故事轻唤] {user_id}/{char_id} 轻唤已发送")
+    except Exception as e:
+        logger.warning(f"[故事轻唤] 生成失败: {e}")
+
+
 async def _maybe_daily_proactive(user_id: str, today: str):
     """联想开关（proactive_enabled）控制：好感度驱动的主动频率；
     按 (用户,角色) 独立调度——不管前台切到哪个角色、不管应用是否最小化，只要程序在跑就会按各自冷却触发"""
@@ -653,10 +720,17 @@ async def _background_loop():
                         _spawn_tool_task(_fire_webcheck(uid, task.get("payload") or {}), limited=True)
                     elif task.get("kind") == "imagecheck":
                         _spawn_tool_task(_fire_imagecheck(uid, task.get("payload") or {}), limited=True)
+                    elif task.get("kind") == "storycheck":
+                        _spawn_tool_task(_fire_story_check(uid, task.get("payload") or {}), limited=True)
                 # 会话状态机 idle 扫描 + 主动消息没被回 → 记失落（按角色独立）
                 for _cid in [c for u, c in mem_mgr.get_user_char_pairs() if u == uid]:
                     _update_conv_state(uid, _cid, "idle")
                     _check_unanswered(uid, _cid, now)
+                    # 讲故事后听众长时间没回 → 排一次轻唤（喂？/睡着了？）
+                    try:
+                        _maybe_schedule_story_check(uid, _cid, now)
+                    except Exception as e:
+                        logger.warning(f"[故事轻唤] 后台扫描失败 {uid}/{_cid}: {e}")
                     # 当天记忆实时归纳：话题聊完闲置一段时间且有新消息 → 重新生成大纲 + 事件分条
                     try:
                         await _regenerate_day_context(uid, _cid, today)

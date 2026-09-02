@@ -461,6 +461,16 @@ class LLMClient(MainBrainProvider):
             return []
         return parse_chat_messages(raw)["messages"]
 
+    async def generate_story_check(self, char_id: str, user_id: str, context: str = "") -> list:
+        """讲故事/长内容后对方半天没回：最多一句轻唤（喂？/睡着了？），不发第二句、不继续讲。"""
+        if not self.available:
+            return []
+        sys_prompt = await self._build_active_prompt(char_id, user_id, kind="story_check", context=context)
+        raw = await self._call_real_llm(sys_prompt, [{"role": "user", "content": "[系统] 讲完后对方一直没回，现在该不该轻唤一句？"}], 0.8)
+        if re.search(r'"messages"\s*:\s*\[\s*\]', raw or ""):
+            return []
+        return parse_chat_messages(raw)["messages"]
+
     async def generate_reminder(self, char_id: str, user_id: str, payload: dict) -> list:
         """到点提醒用户：结合角色人设/关系/原请求自然提醒，冒失人设或低权重事件可带'是不是提醒晚了'式关系"""
         if not self.available:
@@ -632,6 +642,16 @@ class LLMClient(MainBrainProvider):
                 base += f"\n【今天的聊天大纲（主动消息要顺着今天聊过的内容走，别凭空另起一个八竿子打不着的话题）】\n{_today_outline}\n"
         except Exception:
             pass
+        # 主动消息也要接上 RAG 知识：顺着最近话题/当天内容查用户知识库，命中则带上（不脱离资料库硬聊）
+        if kind in ("proactive", "night", "reminder", "story_check") and user_id:
+            try:
+                _rag_q = ((_conv_state(user_id, char_id).get("last_topic") or "").strip()[:80]) or (context or "")
+                if _rag_q:
+                    _kctx = kb.get_knowledge_context(_rag_q)
+                    if _kctx:
+                        base += f"\n【知识库（内部，知道就行，别整段背诵）】\n{_kctx}\n"
+            except Exception:
+                pass
         hour = "早上" if time.strftime("%H") < "12" else "下午" if time.strftime("%H") < "18" else "晚上"
         if kind == "nudge":
             ladder = "这是第 1 次追问：对方刚没回，语气放轻，可以就是『？』『人呢』或一句话带过，别催太紧。"
@@ -646,6 +666,14 @@ class LLMClient(MainBrainProvider):
                 f"已经过去几分钟对方还没回。像真人一样随口补一条。{ladder}"
                 f"不要'在吗'式轰炸，不要长篇，不要换个说法把同一个问题又问一遍，不要卖萌连环催。\n"
                 f"【刚才的话题】{context or '（不记得具体内容就随口带一句）'}\n"
+            )
+        elif kind == "story_check":
+            base += (
+                f"\n【场景】你刚才在给对方讲故事/发了一长串内容，讲完后对方半天没回。\n"
+                f"像真人一样判断：最多发 1 条很短的轻唤（比如『喂？』『睡着了？』『还醒着吗』『那我先讲到这？』），\n"
+                f"只发一句就停，别催第二句、别自己又接下去继续讲。\n"
+                f"如果你觉得对方就是在忙/去睡了不想被打扰，就输出空 messages（= 不发）。\n"
+                f"【你讲的内容】{context or '（刚才那段故事/长内容）'}\n"
             )
         elif kind == "reminder":
             base += (
