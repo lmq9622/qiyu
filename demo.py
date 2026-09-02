@@ -62,6 +62,7 @@ import companion.active as companion_active
 import companion.emotions as companion_emotions
 import companion.settings as companion_settings
 import companion.llm as companion_llm
+from companion.pipeline import pending_queue
 """
 栖语 (Qiyu) - 完整版 Demo 启动器
 =================================
@@ -238,14 +239,16 @@ _background_task: asyncio.Task | None = None
 
 
 class UserChatGate:
-    """同用户聊天串行门
-    回复生成期间到达的新消息：请求立即返回（前端正常显示已发出），
-    实际按到达顺序排队，等上一条回复结束（流式/非流式）后才轮到处理。
-    asyncio.Lock 公平排队（FIFO），不同用户互不影响。
+    """同用户聊天串行门 + §15 服务端合批
+    回复生成期间到达的新消息：请求立即返回 queued（前端正常显示已发出），
+    消息进入 pending 队列，等上一条回复结束（流式/非流式）后作为批量上下文一次 prefill，
+    不逐条单独推理。asyncio.Lock 公平排队（FIFO），不同用户互不影响。
+    busy 标记保证『同一用户同一时刻最多一个生成』，剩余消息全部进队列。
     """
 
     def __init__(self):
         self._locks: dict[str, asyncio.Lock] = {}
+        self._busy: set[str] = set()
 
     def lock_for(self, user_id: str) -> asyncio.Lock:
         lock = self._locks.get(user_id)
@@ -253,6 +256,15 @@ class UserChatGate:
             lock = asyncio.Lock()
             self._locks[user_id] = lock
         return lock
+
+    def is_busy(self, user_id: str) -> bool:
+        return user_id in self._busy
+
+    def mark_busy(self, user_id: str) -> None:
+        self._busy.add(user_id)
+
+    def clear_busy(self, user_id: str) -> None:
+        self._busy.discard(user_id)
 
 
 chat_gate = UserChatGate()
@@ -266,6 +278,90 @@ def _build_trailing_user_batch(messages: list) -> list | None:
             break
         batch.append({"text": _msg_text(m.get("content", "")), "timestamp": time.time()})
     batch.reverse()
+    return batch if len(batch) >= 2 else None
+
+
+async def _handle_pending_batch(user_id: str, char_id: str, temperature: float):
+    """§15 服务端合批：把生成期间排队的连续用户消息合并为一次 prefill，
+    不逐条单独推理；结果经事件通道（/v1/events）真实下发。"""
+    pending = pending_queue.drain(user_id)
+    if not pending:
+        return
+    texts = []
+    for p in pending:
+        t = (p.get("text") or "").strip()
+        if p.get("images"):
+            t = ("[图片] " + t).strip()
+        if t:
+            texts.append(t)
+    if not texts:
+        return
+    combined = "；".join(texts)
+    logger.info(f"[合批] {user_id} 生成期间收到 {len(texts)} 条消息，合并为一次 prefill: {combined[:80]!r}")
+    _cancel_nudge(user_id, char_id)
+    _update_conv_state(user_id, char_id, "user_message", None, combined)
+    _st = user_states.setdefault(user_id, {"character_id": char_id, "temperature": 0.7, "history": []})
+    _st["character_id"] = char_id
+    _st["last_user_at"] = time.time()
+    _st.pop("unanswered_pending", None)
+    for t in texts:
+        mem_mgr.add_message(user_id, "user", t, char_id)
+    try:
+        from runtime.db import unified_store
+        from runtime.logging_setup import logger_conv
+        for t in texts:
+            unified_store.record_message(user_id, char_id, "user", t)
+            logger_conv.info(f"[{user_id}] {char_id} 用户: {t[:200]}")
+    except Exception:
+        pass
+    try:
+        history = mem_mgr.get_recent_history(user_id, limit=40, char_id=char_id)
+    except Exception:
+        history = []
+    llm_messages = []
+    for h in history:
+        role = "user" if h.get("role") == "user" else "assistant"
+        content = h.get("content") or ""
+        if isinstance(content, list):
+            parts = []
+            for it in content:
+                if isinstance(it, dict):
+                    parts.append(it.get("text") or "[图片]")
+            content = " ".join(parts)
+        llm_messages.append({"role": role, "content": content})
+    batch = [{"text": t, "timestamp": (p.get("timestamp") or time.time())}
+             for t, p in zip(texts, pending)]
+    try:
+        reply_text, reply_pieces = await llm_client.chat(
+            char_id, llm_messages, temperature,
+            user_id=user_id, use_memory=True, use_rag=True,
+            pending_messages=batch if len(batch) >= 2 else None)
+    except Exception as e:
+        logger.error(f"[合批] 批量回复生成失败: {e}")
+        return
+    if not reply_text:
+        return
+    try:
+        # chat() 内部 _finalize_chat_reply 已更新会话状态/关系/情绪；这里只做记忆落账 + 事件下发
+        msgs = []
+        for _p in (reply_pieces or []):
+            _m = {"text": _p.get("text", ""), "type": _p.get("type", "statement"), "delay": _p.get("delay", 0)}
+            if _p.get("image_url"):
+                _m["image_url"] = _p.get("image_url")
+            msgs.append(_m)
+        if msgs:
+            await _send_active_messages(user_id, msgs, "ordinary_chat", reason="batch", char_id=char_id)
+        try:
+            from runtime.db import unified_store
+            unified_store.record_message(user_id, char_id, "assistant", reply_text, pieces=reply_pieces)
+        except Exception:
+            pass
+        if main_loop and not main_loop.is_closed():
+            asyncio.run_coroutine_threadsafe(_run_memory_pipeline(user_id, char_id), main_loop)
+        else:
+            asyncio.create_task(_run_memory_pipeline(user_id, char_id))
+    except Exception as e:
+        logger.error(f"[合批] 批量回复后处理失败: {e}")
     return batch if len(batch) >= 2 else None
 
 
@@ -378,6 +474,24 @@ async def startup():
         mem_content = content
         if images:
             mem_content = ("[图片] " + content).strip()
+        # §15 服务端合批：上一条回复生成中 → 本条进 pending 队列，统一合批（不逐条推理）
+        if chat_gate.is_busy(user_id):
+            pending_queue.enqueue(user_id, {"text": mem_content, "images": images, "timestamp": time.time()})
+            _push_event(user_id, {
+                "type": "chat_user",
+                "user_id": user_id,
+                "char_id": char_id,
+                "text": mem_content,
+                "images": images,
+                "ts": time.time(),
+            })
+            if user_id != "web_user":
+                _push_event("web_user", dict(user_id=user_id, char_id=char_id,
+                                             type="chat_user", text=mem_content,
+                                             images=images, ts=time.time()))
+            logger.info(f"[合批] {user_id} 上一条回复生成中，微信消息进 pending 队列")
+            return "", []
+        chat_gate.mark_busy(user_id)
         mem_mgr.add_message(user_id, "user", mem_content, char_id, images=images)
         # 微信消息即时同步到 App 前端（不等模型生成完，先显示用户这条）
         _push_event(user_id, {
@@ -410,6 +524,9 @@ async def startup():
         _push_event(user_id, {"type": "typing", "user_id": user_id, "char_id": char_id})
         try:
             reply, pieces = await llm_client.chat(char_id, messages, user_id=user_id, channel=channel)
+        except Exception:
+            chat_gate.clear_busy(user_id)
+            raise
         finally:
             _push_event(user_id, {"type": "typing_stop", "user_id": user_id, "char_id": char_id})
 
@@ -434,6 +551,13 @@ async def startup():
         _push_event(user_id, ev)
         if user_id != "web_user":
             _push_event("web_user", dict(ev, notify=True))
+        chat_gate.clear_busy(user_id)
+        while pending_queue.pending(user_id):
+            try:
+                await _handle_pending_batch(user_id, char_id, float(st.get("temperature") or 0.7))
+            except Exception as e:
+                logger.error(f"[合批] 微信路径合批失败: {e}")
+                break
         return reply, pieces
 
     async def handle_wechat_msg(user_id: str, content: str, channel=None,
@@ -716,8 +840,23 @@ async def chat_completions(request: ChatRequest):
         async def generate():
             lock = chat_gate.lock_for(user_id)
             if lock.locked():
-                logger.info(f"[Chat] {user_id} 上一条回复生成中，新消息已排队（锁等待）")
+                # §15 服务端合批：第一条立即生成，后续连发消息进 pending 队列（不逐条单独推理）
+                for _mc in mem_contents:
+                    pending_queue.enqueue(user_id, {"text": _mc, "images": request.images or [], "timestamp": time.time()})
+                logger.info(f"[合批] {user_id} 上一条回复生成中，{len(mem_contents)} 条消息进入 pending 队列")
+                yield f"data: {json.dumps({'type': 'queued', 'id': response_id, 'message': '消息已排队，稍后统一回复'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
             async with lock:
+                chat_gate.mark_busy(user_id)
+                async def _flush_batch():
+                    chat_gate.clear_busy(user_id)
+                    while pending_queue.pending(user_id):
+                        try:
+                            await _handle_pending_batch(user_id, char_id, temperature)
+                        except Exception as e:
+                            logger.error(f"[合批] 流式路径合批失败: {e}")
+                            break
                 # 用户来消息了：取消追问计划、刷新最后活跃时间、清掉未回复的小情绪
                 if user_id in user_states:
                     user_states[user_id].pop("pending_nudge", None)
@@ -803,10 +942,12 @@ async def chat_completions(request: ChatRequest):
                                     pass
                 except HTTPException as e:
                     yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'error'}], 'error': {'message': str(e.detail)}})}\n\n"
+                    await _flush_batch()
                     return
                 except Exception as e:
                     logger.error(f"流式聊天失败: {e}")
                     yield f"data: {json.dumps({'id': response_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'error'}], 'error': {'message': f'生成失败: {e}'}})}\n\n"
+                    await _flush_batch()
                     return
 
                 # 解析多消息 JSON，更新会话状态 + 关系变化 + 追问计划
@@ -855,6 +996,9 @@ async def chat_completions(request: ChatRequest):
                             parsed = _parsed3
                     except Exception as _retry_e:
                         logger.warning(f"[Chat] 空回复兜底重试失败: {_retry_e}")
+                # 重拉仍空：回诚实兜底句，绝不回"……"
+                if not parsed["messages"]:
+                    parsed["messages"] = [{"text": "（刚才这条我没接住，你再说一遍？）", "type": "statement", "delay": 0}]
                 # 增量没推完的（JSON 在末尾才闭合）在这里补齐
                 if len(parsed["messages"]) > safe_pushed:
                     new_msgs = parsed["messages"][safe_pushed:]
@@ -906,14 +1050,20 @@ async def chat_completions(request: ChatRequest):
                 }
                 yield f"data: {json.dumps({'type': 'assistant_messages', 'id': response_id, 'partial': False, 'conversation_state': parsed['conversation_state'], 'relation': relation, 'emotion': _emotion_payload, 'messages': parsed['messages'], 'pushed': safe_pushed}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
+                await _flush_batch()
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     else:
         lock = chat_gate.lock_for(user_id)
         if lock.locked():
-            logger.info(f"[Chat] {user_id} 上一条回复生成中，新消息已排队（锁等待）")
+            # §15 服务端合批：第一条立即生成，后续连发消息进 pending 队列（不逐条单独推理）
+            for _mc in mem_contents:
+                pending_queue.enqueue(user_id, {"text": _mc, "images": request.images or [], "timestamp": time.time()})
+            logger.info(f"[合批] {user_id} 上一条回复生成中，{len(mem_contents)} 条消息进入 pending 队列")
+            return JSONResponse(content={"status": "queued", "id": response_id, "message": "消息已排队，稍后统一回复"})
         async with lock:
+            chat_gate.mark_busy(user_id)
             # 用户来消息了：取消追问计划、刷新最后活跃时间、清掉未回复的小情绪
             if user_id in user_states:
                 user_states[user_id].pop("pending_nudge", None)
@@ -932,13 +1082,17 @@ async def chat_completions(request: ChatRequest):
             except Exception:
                 pass
             _pending = _build_trailing_user_batch(llm_messages)
-            reply, pieces = await llm_client.chat(
-                char_id, llm_messages, temperature,
-                user_id=user_id,
-                use_memory=request.use_memory,
-                use_rag=request.use_rag,
-                pending_messages=_pending,
-            )
+            try:
+                reply, pieces = await llm_client.chat(
+                    char_id, llm_messages, temperature,
+                    user_id=user_id,
+                    use_memory=request.use_memory,
+                    use_rag=request.use_rag,
+                    pending_messages=_pending,
+                )
+            except Exception as e:
+                chat_gate.clear_busy(user_id)
+                raise HTTPException(500, f"生成失败: {e}")
             if reply:
                 mem_mgr.add_message(user_id, "assistant", reply, char_id, pieces=pieces)
             else:
@@ -951,6 +1105,13 @@ async def chat_completions(request: ChatRequest):
             except Exception:
                 pass
             asyncio.create_task(_run_memory_pipeline(user_id, char_id))
+            chat_gate.clear_busy(user_id)
+            while pending_queue.pending(user_id):
+                try:
+                    await _handle_pending_batch(user_id, char_id, temperature)
+                except Exception as e:
+                    logger.error(f"[合批] 非流式路径合批失败: {e}")
+                    break
         return JSONResponse(content={
             "id": response_id,
             "object": "chat.completion",
@@ -1752,6 +1913,14 @@ async def runtime_providers_api():
     return {"providers": runtime_manager.registry.list()}
 
 
+@app.get("/v1/concurrency")
+async def concurrency_api():
+    """全局并发限制器状态：parallel_requests 换算结果 + 各类分闸上限 + 实时占用。"""
+    from runtime.concurrency import concurrency_limiter
+    return {"settings": {"parallel_requests": concurrency_limiter.configured_limit() or "unlimited"},
+            "stats": concurrency_limiter.stats()}
+
+
 # ============ Health ============
 
 
@@ -1839,9 +2008,11 @@ async def tts_api(data: dict):
     返回 wav/mp3 文件流；未配置可用引擎时返回 503（不假装发声）。
     """
     from runtime.tts import tts_provider
+    from runtime.concurrency import concurrency_limiter
     if not tts_provider.status().available:
         return JSONResponse(status_code=503, content={"error": "tts_unavailable", "reason": tts_provider.status().reason})
-    out = await tts_provider.synthesize(
+    async with concurrency_limiter.slot("tts"):
+        out = await tts_provider.synthesize(
         str(data.get("text") or ""),
         emotion=str(data.get("emotion") or ""),
         intensity=data.get("intensity"),
@@ -1866,10 +2037,12 @@ async def tts_status_api():
 async def stt_api(request: Request):
     """语音转写：raw body 为音频字节（wav/silk/amr/mp3），返回 {text}。"""
     from runtime.stt import stt_provider
+    from runtime.concurrency import concurrency_limiter
     body = await request.body()
     if not body:
         return JSONResponse(status_code=400, content={"error": "empty_audio"})
-    text = await stt_provider.transcribe(body)
+    async with concurrency_limiter.slot("stt"):
+        text = await stt_provider.transcribe(body)
     return {"text": text, "available": stt_provider.status().available}
 
 

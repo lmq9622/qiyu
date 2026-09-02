@@ -263,8 +263,7 @@ def parse_chat_messages(raw_text: str) -> dict:
                                      "delay": _normalize_delay("闲聊", i, 0, total_hint=len(texts))})
         if not messages and raw:
             messages.append({"text": raw[:3000], "type": "statement", "delay": 0})
-        if not messages:
-            messages.append({"text": "……", "type": "thinking", "delay": 0})
+        # 模型确实什么都没输出：返回空列表，绝不注入假"……"思考气泡（thinking 由流式 reasoning 通道承载）
     schedules = []
     if isinstance(data, dict):
         schedules = _parse_schedules(data.get("schedules"))

@@ -94,10 +94,15 @@ class ToolAgent(AIProvider):
             return [query[:80]]
 
     async def search(self, query: str) -> ToolEvidence:
-        """真实联网搜索：成功/失败都如实上报，绝不编造结果。"""
+        """真实联网搜索：成功/失败都如实上报，绝不编造结果。受全局并发总闸(tool 分闸)约束。"""
         query = (query or "").strip()
         if not query:
             return ToolEvidence(False, [], query, backend="empty-query")
+        from runtime.concurrency import concurrency_limiter
+        async with concurrency_limiter.slot("tool"):
+            return await self._search_locked(query)
+
+    async def _search_locked(self, query: str) -> ToolEvidence:
         keywords = await self._plan(query)
         if not keywords:
             return ToolEvidence(False, [], query, backend="plan-none")
@@ -125,10 +130,15 @@ class ToolAgent(AIProvider):
         return ev
 
     async def search_images(self, query: str) -> ToolEvidence:
-        """真实搜图：返回 [{title, url, image_url}]；没找到就如实说没有，绝不假装拍图。"""
+        """真实搜图：返回 [{title, url, image_url}]；没找到就如实说没有，绝不假装拍图。受全局并发总闸约束。"""
         query = (query or "").strip()
         if not query:
             return ToolEvidence(False, [], query, backend="empty-query")
+        from runtime.concurrency import concurrency_limiter
+        async with concurrency_limiter.slot("tool"):
+            return await self._search_images_locked(query)
+
+    async def _search_images_locked(self, query: str) -> ToolEvidence:
         keywords = await self._plan(query)
         if not keywords:
             return ToolEvidence(False, [], query, backend="plan-none")

@@ -409,7 +409,21 @@ class LLMClient(MainBrainProvider):
             if m.get("role") == "user":
                 user_content = _msg_text(m.get("content", ""))
                 break
-        return _finalize_chat_reply(user_id, raw, user_content, char_id)
+        reply, pieces = _finalize_chat_reply(user_id, raw, user_content, char_id)
+        if not reply:
+            # 空正文兜底：思考预算耗尽/空回包 → 关思考显式重拉一次；仍空回诚实兜底句，绝不回"……"
+            try:
+                retry_raw = await self._call_real_llm(
+                    system_msg,
+                    [{"role": "user", "content": user_content or "（继续刚才的对话，正常回复我）"}],
+                    temperature, no_thinking=True)
+                reply, pieces = _finalize_chat_reply(user_id, retry_raw, user_content, char_id)
+            except Exception as e:
+                logger.warning(f"[LLM] 空正文兜底重试失败: {e}")
+        if not reply:
+            reply = "（我这边好像没接住，你再说一遍？）"
+            pieces = [{"text": reply, "type": "statement", "delay": 0}]
+        return reply, pieces
 
     async def chat_stream(self, char_id: str, messages: list, temperature: float = 0.7,
                           user_id: str = "", use_memory: bool = True, use_rag: bool = True,
@@ -429,7 +443,7 @@ class LLMClient(MainBrainProvider):
         """提问/给建议后几分钟没回复：按追问梯次（attempt/total）生成自然的真人追问（JSON 消息列表）。
         第 1 次先轻轻问一句（可以是『？』『人呢』）；后面才逐步加急/调侃。"""
         if not self.available:
-            return [{"text": "……", "type": "thinking", "delay": 0}]
+            return []
         sys_prompt = await self._build_active_prompt(char_id, user_id, kind="nudge", context=context, attempt=attempt, total=total)
         raw = await self._call_real_llm(sys_prompt, [{"role": "user", "content": f"[系统] 到时间了，这是第 {attempt + 1}/{total} 次追问。"}], 0.8)
         if re.search(r'"messages"\s*:\s*\[\s*\]', raw or ""):
@@ -439,7 +453,7 @@ class LLMClient(MainBrainProvider):
     async def generate_proactive(self, char_id: str, user_id: str, night: bool = False) -> list:
         """每日主动展开对话：结合角色人设与记忆自然发微信（JSON 消息列表）；night=True 为夜间场景（心事/求安慰）"""
         if not self.available:
-            return [{"text": "……", "type": "thinking", "delay": 0}]
+            return []
         sys_prompt = await self._build_active_prompt(char_id, user_id, kind="proactive", night=night)
         raw = await self._call_real_llm(sys_prompt, [{"role": "user", "content": "[系统] 主动发一条微信。"}], 0.9)
         # 模型判断此刻没话可说：输出空 messages 列表 = 不发
@@ -450,7 +464,7 @@ class LLMClient(MainBrainProvider):
     async def generate_reminder(self, char_id: str, user_id: str, payload: dict) -> list:
         """到点提醒用户：结合角色人设/关系/原请求自然提醒，冒失人设或低权重事件可带'是不是提醒晚了'式关系"""
         if not self.available:
-            return [{"text": "……", "type": "thinking", "delay": 0}]
+            return []
         sys_prompt = await self._build_active_prompt(char_id, user_id, kind="reminder", context=(payload or {}).get("text", ""))
         req = (payload or {}).get("request", "")[:200]
         raw = await self._call_real_llm(
@@ -470,7 +484,7 @@ class LLMClient(MainBrainProvider):
         stale=True 表示查的过程中用户已经聊到别的事去了 → 别把旧结果硬塞回来（可输出空 messages）。
         images 传入真实搜到的图片时，模型只配一句自然的话，系统会把真实图片附上。"""
         if not self.available:
-            return [{"text": "……", "type": "thinking", "delay": 0}]
+            return []
         sys_prompt = await self._build_active_prompt(char_id, user_id, kind="webcheck", context=query)
         images = images or []
         res_text = "\n".join(
@@ -675,7 +689,7 @@ class LLMClient(MainBrainProvider):
 
     async def _call_real_llm_inner(self, system_msg: str, messages: list, temperature: float,
                                    url: str = None, model: str = None, api_key: str = "",
-                                   no_thinking: bool = False) -> str:
+                                   no_thinking: bool = False, _retried: bool = False) -> str:
         url = (url or LLM_URL).rstrip("/")
         model = model or LLM_MODEL
         headers = {"Content-Type": "application/json"}
@@ -702,14 +716,13 @@ class LLMClient(MainBrainProvider):
             msg = data["choices"][0].get("message", {})
             content = (msg.get("content") or "").strip()
             thinking_on = bool((payload.get("chat_template_kwargs") or {}).get("enable_thinking") in (True, "true", "True", 1))
-            # 推理模型可能把预算全耗在思考上导致正片为空：退回 reasoning_content 兜底
-            if not content:
-                content = (msg.get("reasoning_content") or "").strip()
-            # 思考模式返回空正文（含 reasoning_content 也为空）：降级为不思考重试一次，
-            # 保证 proactive/active/记忆整理等非流式路径也不会出现「……」/空回复
+            # 严格分离：最终回复只认 content；reasoning_content 仅作思考过程，绝不顶替正片
             if not content and thinking_on:
-                logger.warning("[LLM] 思考模式返回空正文，降级为不思考重试")
-                return await self._call_real_llm_inner(system_msg, messages, temperature, url, model, api_key, no_thinking=True)
+                logger.warning("[LLM] 思考模式返回空正文，自动降级为不思考重试（不回退 reasoning_content，思考不是回复）")
+                return await self._call_real_llm_inner(system_msg, messages, temperature, url, model, api_key, no_thinking=True, _retried=True)
+            if not content and not _retried:
+                logger.warning("[LLM] 模型返回空正文，自动重试一次")
+                return await self._call_real_llm_inner(system_msg, messages, temperature, url, model, api_key, no_thinking=True, _retried=True)
             return content
 
     async def _call_real_llm_stream(self, system_msg: str, messages: list, temperature: float,

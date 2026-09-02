@@ -135,11 +135,12 @@ def _postprocess_reply_messages(user_id: str, char_id: str, parsed: dict,
         _ans = _fact_short_answer(recent_fact_hit.get("text", ""))
         if _ans:
             kept.append({"text": _ans[:30], "type": "statement", "delay": 0})
+    # 空结果：绝不注入假"……"思考气泡（thinking 由 reasoning 通道承载）
+    if not kept and search_pending:
+        kept.append({"text": random.choice(["我看看", "我找找", "等我搜下"]), "type": "thinking", "delay": 0})
     if not kept:
-        if search_pending:
-            kept.append({"text": random.choice(["我看看", "我找找", "等我搜下"]), "type": "thinking", "delay": 0})
-        else:
-            kept.append({"text": "…", "type": "thinking", "delay": 0})
+        parsed["messages"] = []
+        return parsed
     cap = _msg_cap(state, longform)
     if len(kept) > cap:
         kept = kept[:cap]

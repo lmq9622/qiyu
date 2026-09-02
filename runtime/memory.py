@@ -74,6 +74,12 @@ class MemoryProvider(AIProvider):
 
     async def _retrieve_inner(self, user_id: str, query: str, char_id: str = "",
                               top_k: int = 5) -> list:
+        from runtime.concurrency import concurrency_limiter
+        async with concurrency_limiter.slot("memory"):
+            return await self._retrieve_slot(user_id, query, char_id, top_k)
+
+    async def _retrieve_slot(self, user_id: str, query: str, char_id: str = "",
+                             top_k: int = 5) -> list:
         if self._mem is None:
             return []
         try:
