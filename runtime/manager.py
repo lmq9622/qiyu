@@ -63,16 +63,39 @@ class RuntimeManager:
 
     # ---------- 微基准 + backend 选择（规格§4/§13） ----------
     async def bench(self, bench_fn=None) -> list[BenchmarkResult]:
-        """对可用候选 backend 跑 MicroBenchmark（真实 bench_fn 或硬件启发式）。"""
+        """对可用候选 backend 跑 MicroBenchmark（真实 bench_fn 或硬件启发式）。
+
+        默认 bench_fn：对当前 Realtime 后端真实测 TTFT/tok/s（仅测它能跑的 backend，
+        其它候选交给启发式估算，绝不把测不到的 backend 当实测）。"""
         candidates = [c for c in self.backends if c.available]
+        if bench_fn is None:
+            bench_fn = self._default_bench_fn()
         self._bench_results = await micro_benchmark.benchmark(candidates, self.profile, bench_fn)
         return self._bench_results
+
+    def _default_bench_fn(self):
+        """把当前 Realtime 后端的 bench_inference 包成 MicroBenchmark 需要的回调。"""
+        backend_name = getattr(self._realtime, "backend_name", "") if self._realtime else ""
+        bench_inf = getattr(self._realtime, "bench_inference", None) if self._realtime else None
+        if not backend_name or bench_inf is None:
+            return None  # 无真实后端 → 纯硬件启发式（和之前行为一致）
+
+        async def _fn(cap: BackendCapability):
+            if cap.backend != backend_name:
+                return None  # 该 backend 跑不了当前模型 → 启发式兜底，不假装实测
+            return await bench_inf()
+        return _fn
 
     def select_backend(self, role: str) -> Optional[BackendCapability]:
         """先看基准结果，没有则按能力矩阵 + 优先级选择（CPU 永远是底线）。"""
         candidates = [c for c in self.backends if c.available]
         if role == "realtime":
             candidates = [c for c in candidates if c.text]
+            # 只保留当前 Realtime 后端真实能跑的 backend（如 MiniMind-O 只有 cpu/cuda）
+            supported = getattr(self._realtime, "supported_backends", None)
+            if callable(supported):
+                sup = set(supported())
+                candidates = [c for c in candidates if c.backend in sup]
         if self._bench_results:
             top = self._bench_results[0]
             hit = next((c for c in candidates if c.backend == top.backend), None)
@@ -94,18 +117,36 @@ class RuntimeManager:
                 plan = self._realtime.model_plan(self.backends)
             except Exception:
                 plan = []
+        omni = getattr(self._realtime, "_runtime", None)
+        _rt = getattr(self._realtime, "_runtime", "") if self._realtime else ""
+        if not isinstance(_rt, str):
+            # omni 后端的 _runtime 是加载器对象：只上报字符串标签，绝不把对象塞进状态
+            _rt = str(getattr(self._realtime, "runtime_label", "")) or type(_rt).__name__
         return {
             "models_dir": str(model.root),
             "thinker_present": model.has_thinker(),
             "components": model.present_components(),
             "plan": [p.to_dict() for p in plan],
-            "runtime": getattr(self._realtime, "_runtime", "") if self._realtime else "",
+            "runtime": _rt,
             "realtime_available": self._realtime.status().available if self._realtime else False,
+            "omni": {
+                "model_dir": str(omni.model_dir) if omni else "",
+                "complete": omni.available() if omni else False,
+                "device": omni.backend_name if omni else "",
+                "loaded": omni.loaded if omni else False,
+                "load_error": omni.load_error or "" if omni else "",
+            } if omni else None,
         }
 
     def load_model(self, path: str = "") -> dict:
         """加载 MiniMind-O Thinker 权重（安装器下载后调用）；成功返回 status。"""
         try:
+            if hasattr(self._realtime, "_runtime") and getattr(self._realtime, "_runtime", None) is not None:
+                rt = self._realtime._runtime
+                if not rt.available():
+                    return {"ok": False, "reason": self._realtime._unavailable_reason()}
+                ok = rt.ready()
+                return {"ok": ok, "path": str(rt.model_dir), "status": self.model_status()}
             from runtime.realtime import _load_model
             if not path:
                 model = discover_models()
@@ -122,12 +163,16 @@ class RuntimeManager:
 
     def unload_model(self) -> dict:
         """卸载 Realtime 模型（释放内存；下次 judge 重新加载）。"""
-        if self._realtime is not None and hasattr(self._realtime, "_gen"):
+        if self._realtime is not None:
             try:
-                self._realtime._gen = None
-                self._realtime._gen_checked = False
-            except Exception:
-                pass
+                unloader = getattr(self._realtime, "unload", None)
+                if callable(unloader):
+                    unloader()
+                elif hasattr(self._realtime, "_gen"):
+                    self._realtime._gen = None
+                    self._realtime._gen_checked = False
+            except Exception as e:
+                logger.warning(f"[Runtime] 卸载 Realtime 模型失败: {e}")
         return {"ok": True}
 
     # ---------- Realtime Brain ----------

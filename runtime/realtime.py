@@ -5,8 +5,10 @@ MiniMind-O 是产品自带的 Realtime Brain（Zero Setup），负责实时反�
 短消息/判断是否需要 Main Brain，不替代 Main LLM。
 
 本模块实现真正的 Provider 后端（不再是纯占位）：
-- CPUBackend / VulkanBackend / CUDABackend：从 `models/realtime/` 加载 MiniMind-O
-  （优先 GGUF + llama.cpp；ONNX + onnxruntime 作为备选），能跑就真实 judge；
+- MiniMindOOmniBackend：官方 MiniMind-O transformers 权重（torch，CPU 必跑 /
+  CUDA 自动），文本推理零额外依赖，模型目录自动发现+下载（优先）；
+- CPUBackend / VulkanBackend / CUDABackend：MiniMind2 GGUF + llama.cpp（含 Vulkan
+  GPU）/ ONNX 备选路径，保留已有能力，能跑就真实 judge；
 - 每组件（Thinker/Talker/SenseVoice/SigLIP2/Mimi/CAMPPlus/VAD/Codec/VisionEncoder）
   拥有独立 Device / Backend capability，允许 CPU/GPU 混合（规格§6）；
 - 模型/推理运行时不在当前分发时：如实上报 unavailable + 原因，由 RuntimeManager
@@ -34,6 +36,11 @@ from runtime.providers import (
     RealtimeDecision,
 )
 from runtime.hardware import BackendCapability, HardwareProfile
+from runtime.minimindo import (
+    MiniMindOOmniRuntime,
+    discover_model_dir,
+    is_complete,
+)
 
 # ---------------- 多组件能力（规格§6：不要把 0.1B 等同于完整 Omni pipeline） ----------------
 COMPONENTS = (
@@ -233,6 +240,44 @@ def component_plan(selected_backend: str, model: MiniMindModel,
     return plan
 
 
+def _judge_prompt(user_text: str) -> str:
+    """Realtime judge 的统一提示词（真实模型要求输出一行 JSON）。"""
+    return (
+        "你是实时陪伴大脑 MiniMind。根据用户这句话，只输出一行 JSON：\n"
+        '{"needs_main_brain": true/false, "quick_reply": "可选的极短回复或空", '
+        '"emotion": "happy/calm/annoyed/tired/excited/shy/confused/angry 或空", '
+        '"is_interruption": true/false, "should_wait": true/false}\n'
+        f"用户：{user_text[:200]}"
+    )
+
+
+def _parse_decision(raw: str) -> Optional[RealtimeDecision]:
+    """解析 judge 输出：必须是合法 JSON 对象，否则返回 None（调用方诚实兜底）。"""
+    import json
+    import re
+    if not raw:
+        return None
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    needs = d.get("needs_main_brain", True)
+    if isinstance(needs, str):
+        needs = needs.strip().lower() in ("true", "1", "yes", "是")
+    return RealtimeDecision(
+        needs_main_brain=bool(needs),
+        quick_reply=(str(d.get("quick_reply") or "").strip() or None),
+        emotion=(str(d.get("emotion") or "").strip() or None),
+        is_interruption=bool(d.get("is_interruption")),
+        should_wait=bool(d.get("should_wait")),
+    )
+
+
 class _BaseRealtimeBackend(RealtimeBrainProvider):
     """真实 Realtime Brain 后端基类：模型发现 + 加载 + 诚实状态。"""
 
@@ -309,15 +354,8 @@ class _BaseRealtimeBackend(RealtimeBrainProvider):
             # 诚实兜底：没有真实模型就交给 Main Brain
             return RealtimeDecision(needs_main_brain=True, reason=self._unavailable_reason(), backend="")
         context = context or {}
-        prompt = (
-            "你是实时陪伴大脑 MiniMind。根据用户这句话，只输出一行 JSON：\n"
-            '{"needs_main_brain": true/false, "quick_reply": "可选的极短回复或空", '
-            '"emotion": "happy/calm/annoyed/tired/excited/shy/confused/angry 或空", '
-            '"is_interruption": true/false, "should_wait": true/false}\n'
-            f"用户：{user_text[:200]}"
-        )
-        raw = await self._gen_text(prompt, max_tokens=96)
-        decision = self._parse(raw)
+        raw = await self._gen_text(_judge_prompt(user_text), max_tokens=96)
+        decision = _parse_decision(raw)
         if decision is None:
             # 模型没输出合法 JSON → 保守路由 Main Brain（不假装能实时处理）
             return RealtimeDecision(needs_main_brain=True, quick_reply=None,
@@ -327,29 +365,7 @@ class _BaseRealtimeBackend(RealtimeBrainProvider):
 
     @staticmethod
     def _parse(raw: str) -> Optional[RealtimeDecision]:
-        import json
-        import re
-        if not raw:
-            return None
-        m = re.search(r"\{.*\}", raw, re.S)
-        if not m:
-            return None
-        try:
-            d = json.loads(m.group(0))
-        except Exception:
-            return None
-        if not isinstance(d, dict):
-            return None
-        needs = d.get("needs_main_brain", True)
-        if isinstance(needs, str):
-            needs = needs.strip().lower() in ("true", "1", "yes", "是")
-        return RealtimeDecision(
-            needs_main_brain=bool(needs),
-            quick_reply=(str(d.get("quick_reply") or "").strip() or None),
-            emotion=(str(d.get("emotion") or "").strip() or None),
-            is_interruption=bool(d.get("is_interruption")),
-            should_wait=bool(d.get("should_wait")),
-        )
+        return _parse_decision(raw)
 
     def model_plan(self, caps: Optional[list] = None) -> list[ComponentPlan]:
         return component_plan(self.backend_name, self.model, caps)
@@ -413,12 +429,120 @@ class UnavailableRealtimeBackend(RealtimeBrainProvider):
         )
 
 
+class MiniMindOOmniBackend(RealtimeBrainProvider):
+    """真实 MiniMind-O 后端：官方 transformers 权重（torch）。
+
+    - 文本推理零额外依赖（无需 funasr/librosa/soundfile），CPU 必跑，
+      torch.cuda.is_available() 时自动走 CUDA；
+    - 模型目录自动发现 models/realtime/minimind-3o/...（缺失可经 install_models 下载）；
+    - judge 输出不是合法 JSON 时诚实回退 Main Brain（不假装实时大脑存在）。
+    """
+
+    id = "minimindo-omni"
+    name = "MiniMind-O Realtime Brain（官方权重）"
+
+    def __init__(self, model_root: Optional[Path] = None, device: str = "",
+                 use_moe: bool = False) -> None:
+        super().__init__()
+        self.model_root = Path(model_root) if model_root else _default_model_root()
+        self._runtime = MiniMindOOmniRuntime(device=device, use_moe=use_moe)
+        self.runtime_label = "minimindo-torch"
+        if model_root is not None and is_complete(model_root):
+            self._runtime.model_dir = Path(model_root)
+        self._last_judge_ms = 0.0
+
+    # ---------- 能力 ----------
+    @property
+    def backend_name(self) -> str:
+        return self._runtime.backend_name
+
+    def supported_backends(self) -> list[str]:
+        """该后端真实能跑的 backend（决定 MicroBenchmark 候选，不写死）。"""
+        return [self._runtime.backend_name]
+
+    def _unavailable_reason(self) -> str:
+        if self._runtime.load_error:
+            return f"MiniMind-O 模型加载失败: {self._runtime.load_error[:200]}"
+        return ("models/realtime/ 缺少完整 MiniMind-O 官方权重（minimind-3o/）；"
+                "运行 tools/install_models.py --omni 或 Qiyu 安装向导自动下载")
+
+    def probe(self) -> ProviderStatus:
+        # 只做廉价检查（目录完整 + 无加载错误），绝不在此加载模型：
+        # 状态查询不得阻塞事件循环，也不得与 judge/bench 并发加载模型。
+        ok = self._runtime.available()
+        return ProviderStatus(
+            available=ok,
+            backend=self.backend_name if ok else "",
+            device=str(self._runtime.model_dir),
+            reason="" if ok else self._unavailable_reason(),
+            latency_ms=self._last_judge_ms,
+        )
+
+    def status(self) -> ProviderStatus:
+        return self.probe()
+
+    def unload(self) -> None:
+        self._runtime.unload()
+
+    # ---------- judge ----------
+    async def judge(self, user_text: str, context: Optional[dict] = None) -> RealtimeDecision:
+        import asyncio
+        if not self._runtime.available():
+            return RealtimeDecision(needs_main_brain=True,
+                                    reason=self._unavailable_reason(), backend="")
+        try:
+            r = await asyncio.to_thread(
+                self._runtime.generate_text, _judge_prompt(user_text), "",
+                96, 0.6, 0.9, False)
+        except Exception as e:
+            logger.warning(f"[Realtime] MiniMind-O 推理异常: {e}")
+            return RealtimeDecision(needs_main_brain=True,
+                                    reason=f"MiniMind-O 推理异常: {type(e).__name__}",
+                                    backend=self.backend_name)
+        raw = (r.get("text") or "").strip()
+        self._last_judge_ms = float(r.get("took_ms") or 0.0)
+        decision = _parse_decision(raw)
+        if decision is None:
+            # 0.1B 模型不稳定输出 JSON → 保守路由 Main Brain，并附原文方便定位
+            return RealtimeDecision(needs_main_brain=True, quick_reply=None,
+                                    reason=f"realtime judge 输出不可解析: {raw[:60]}",
+                                    backend=self.backend_name)
+        decision.backend = self.backend_name
+        return decision
+
+    # ---------- MicroBenchmark 实测 ----------
+    async def bench_inference(self) -> dict:
+        import asyncio
+        if not self._runtime.available():
+            raise RuntimeError("MiniMind-O 模型未就绪")
+        r = await asyncio.to_thread(self._runtime.bench, 24)
+        return {"ttft_ms": float(r.get("ttft_ms") or 0.0),
+                "decode_tok_s": float(r.get("decode_tok_s") or 0.0)}
+
+    # ---------- 组件计划 ----------
+    def model_plan(self, caps: Optional[list] = None) -> list[ComponentPlan]:
+        # 官方权重 = Thinker 文本能力已真实就绪；其余 Omni 组件（语音/视觉）未捆绑
+        m = MiniMindModel(root=self._runtime.model_dir,
+                          files={"thinker": "minimind-3o/pytorch_model.bin"})
+        return component_plan(self.backend_name, m, caps)
+
+
 def build_realtime_backend(profile: Optional[HardwareProfile] = None,
                            caps: Optional[list[BackendCapability]] = None,
                            model_root: Optional[Path] = None) -> RealtimeBrainProvider:
-    """按硬件能力 + 模型存在性选择真实后端；都不满足时用诚实兜底。"""
+    """按硬件能力 + 模型存在性选择真实后端；都不满足时用诚实兜底。
+
+    优先级：官方 MiniMind-O 权重（torch，CPU 必跑 / CUDA 自动）→
+    MiniMind2 GGUF（llama.cpp：CUDA/Vulkan/CPU）→ 诚实兜底。
+    """
     prof = profile or HardwareProfile()
     caps = caps or []
+    # 1) 官方 MiniMind-O 权重完整 → 真实 Omni 后端（文本推理零额外依赖）
+    omni_dir = discover_model_dir(model_root)
+    if omni_dir is not None:
+        logger.info(f"[Realtime] 使用官方 MiniMind-O 权重: {omni_dir}")
+        return MiniMindOOmniBackend(model_root=omni_dir)
+    # 2) 现有 GGUF/ONNX Thinker 路径（保留已有能力）
     model = discover_models(model_root)
     runtime = _inference_runtime()
     if not model.has_thinker():
@@ -441,12 +565,15 @@ def build_realtime_backend(profile: Optional[HardwareProfile] = None,
 __all__ = [
     "COMPONENTS",
     "CPUBackend",
+    "MiniMindOOmniBackend",
     "CPURealtimeBackend",
     "CUDARealtimeBackend",
     "ComponentPlan",
     "MiniMindModel",
     "UnavailableRealtimeBackend",
     "VulkanBackend",
+    "_judge_prompt",
+    "_parse_decision",
     "VulkanRealtimeBackend",
     "build_realtime_backend",
     "component_plan",

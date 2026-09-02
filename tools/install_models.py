@@ -3,16 +3,18 @@
 
 用法：
     python tools/install_models.py --check                 # 检测硬件 + 已装模型/运行时
-    python tools/install_models.py --realtime              # 下载 Realtime Brain（MiniMind GGUF）
+    python tools/install_models.py --omni                  # 下载官方 MiniMind-O 权重（ModelScope/HF，CPU 可跑）
+    python tools/install_models.py --omni --moe            # 下载 MiniMind-3o-MoE 版本
+    python tools/install_models.py --realtime              # 下载 Realtime Brain（MiniMind2 GGUF，llama.cpp）
     python tools/install_models.py --realtime --url <url>  # 指定 GGUF 直链
     python tools/install_models.py --main <url>            # 下载本地主模型 GGUF 到 models/main/
 
 诚实说明：
-- MiniMind-O 官方 Omni 权重当前以 PyTorch（safetensors）发布，官方未发布 GGUF；
-  完整 Omni 管线（Thinker/Talker/SenseVoice/SigLIP2/Mimi/VAD/Codec）需要等官方
-  GGUF/ONNX 转换或使用 llama.cpp-omni 方案（MiniCPM-o 系）。
-- 本安装器支持安装「文本 Realtime Brain」GGUF（MiniMind2-gguf 系列，可直接用
-  llama.cpp 跑实时判断），下载失败会如实报错，绝不假装成功。
+- MiniMind-O 官方权重以 PyTorch（transformers 格式）发布，官方未发布 GGUF；
+  Qiyu 用 torch/transformers 直接跑官方权重（文本推理零额外依赖，CPU 必跑，
+  CUDA 自动），这是当前最稳定、最易跨平台部署的方案。
+- --realtime 仍支持安装 MiniMind2-gguf 文本 Thinker（llama.cpp：CUDA/Vulkan/CPU），
+  作为官方权重缺失时的备选后端。下载失败会如实报错，绝不假装成功。
 """
 from __future__ import annotations
 
@@ -25,26 +27,36 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 
 def detect() -> dict:
-    """Hardware Detection（§11）：CPU / GPU / CUDA / Vulkan → 推荐 backend。"""
+    """Hardware Detection（§11）：CPU / GPU / CUDA / Vulkan → 推荐 backend。
+
+    若已安装官方 MiniMind-O 权重（torch/transformers），推荐 backend 跟随 torch
+    真实可用设备（cuda 或 cpu）；否则按 llama.cpp 能力推荐 cuda→vulkan→cpu。
+    """
     from runtime.hardware import HardwareDetector
     prof = HardwareDetector().detect()
+    from runtime.minimindo import MiniMindOOmniRuntime, discover_model_dir
+    if discover_model_dir() is not None:
+        return {"profile": prof.to_dict(),
+                "recommended_backend": MiniMindOOmniRuntime._auto_device(),
+                "realtime_model": "minimind-3o-official"}
     if prof.cuda_available and prof.gpu_vendor == "NVIDIA":
         backend = "cuda"
     elif prof.vulkan_available:
         backend = "vulkan"
     else:
         backend = "cpu"
-    return {"profile": prof.to_dict(), "recommended_backend": backend}
+    return {"profile": prof.to_dict(), "recommended_backend": backend,
+            "realtime_model": "minimind2-gguf"}
 
 
 def recommend(backend: str = "") -> str:
     """Recommended Model：按 backend 返回建议模型说明。"""
     backend = backend or detect()["recommended_backend"]
     return (
-        "Realtime Brain（文本实时判断，llama.cpp 可跑）：MiniMind2-gguf 系列 0.1B~0.3B，"
-        f"推荐 backend={backend}。\n"
-        "完整 Omni（听/说/看）需官方 GGUF/ONNX 或 llama.cpp-omni 方案，当前以 PyTorch 发布；"
-        "架构已按多组件 Device/Backend 预留（见 /v1/runtime/models 的组件计划）。"
+        "Realtime Brain（官方 MiniMind-O 权重，torch 文本推理，CPU 必跑 / CUDA 自动）："
+        "运行 tools/install_models.py --omni 下载（ModelScope/HF）。\n"
+        "备选：MiniMind2-gguf 文本 Thinker（llama.cpp，CUDA/Vulkan/CPU）可用 --realtime 安装。"
+        f"当前推荐 backend={backend}。"
     )
 
 
@@ -62,8 +74,12 @@ def check() -> int:
     print(f"CUDA   : {prof.get('cuda_available')} | Vulkan: {prof.get('vulkan_available')}")
     print(f"推荐backend: {d['recommended_backend']}")
     from runtime.realtime import discover_models, _inference_runtime
-    model = discover_models()
+    from runtime.minimindo import discover_model_dir
+    omni_dir = discover_model_dir()
     print(f"推理运行时 : {_inference_runtime()}")
+    print(f"MiniMind-O 官方权重: {omni_dir or '未安装（可用 --omni 下载）'}"
+          f"{'（' + str(omni_dir) + '）' if omni_dir else ''}")
+    model = discover_models()
     print(f"Realtime Thinker 已装: {model.has_thinker()}（组件: {model.present_components() or '无'}）")
     from runtime.main_brain import find_local_model
     print(f"本地主模型  : {find_local_model() or '未安装（可用 --main <url> 下载或配置远程 API）'}")
@@ -127,6 +143,24 @@ def install_realtime(url: str = "") -> bool:
     return False
 
 
+def install_omni(use_moe: bool = False) -> bool:
+    """下载官方 MiniMind-O transformers 权重到 models/realtime/（CPU 可跑）。
+
+    ModelScope 优先，HuggingFace(hf-mirror) 兜底；已完整则跳过（幂等）。
+    """
+    try:
+        from runtime.minimindo import download_model, is_complete
+        target = download_model(use_moe=use_moe)
+        if is_complete(target):
+            print(f"[OK] MiniMind-O 官方权重安装完成: {target}")
+            return True
+        print(f"[ERR] 权重不完整: {target}")
+        return False
+    except Exception as e:
+        print(f"[ERR] MiniMind-O 权重下载失败: {e}")
+        return False
+
+
 DEFAULT_ASR_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
     "sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2"
@@ -168,13 +202,17 @@ def install_main(url: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Qiyu 模型安装器")
     ap.add_argument("--check", action="store_true", help="检测环境并给出推荐")
-    ap.add_argument("--realtime", action="store_true", help="下载 Realtime Brain（MiniMind GGUF）")
+    ap.add_argument("--realtime", action="store_true", help="下载 Realtime Brain（MiniMind2 GGUF，llama.cpp）")
+    ap.add_argument("--omni", action="store_true", help="下载官方 MiniMind-O 权重（torch/transformers，CPU 可跑）")
+    ap.add_argument("--moe", action="store_true", help="配合 --omni 下载 MiniMind-3o-MoE 版本")
     ap.add_argument("--asr", action="store_true", help="下载 STT 模型（sherpa-onnx paraformer-zh）到 models/asr/")
     ap.add_argument("--main", metavar="URL", default="", help="下载本地主模型 GGUF 到 models/main/")
     ap.add_argument("--url", default="", help="指定直链（配合 --realtime）")
     args = ap.parse_args()
     if args.check:
         return check()
+    if args.omni:
+        return 0 if install_omni(args.moe) else 1
     if args.realtime:
         return 0 if install_realtime(args.url) else 1
     if args.asr:

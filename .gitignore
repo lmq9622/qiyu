@@ -11,6 +11,10 @@ venv/
 
 # 运行时数据
 data/
+
+# 下载的 MiniMind-O 官方权重（216MB+，用 tools/install_models.py --omni 重新拉取）
+models/realtime/minimind-3o/
+models/realtime/minimind-3o-moe/
 logs/
 *.log
 

@@ -21,7 +21,7 @@ ICON_FILE = PROJECT_ROOT / "assets" / "icon.ico"  # 如果有图标的话
 DIST_DIR = PROJECT_ROOT / "dist"
 BUILD_DIR = PROJECT_ROOT / "build"
 SPEC_FILE = PROJECT_ROOT / f"{OUTPUT_NAME}.spec"
-VERSION = "0.0.20"   # M7 打包版本（每次打包顺延 +0.0.1）
+VERSION = "0.0.21"   # M8 打包版本（每次打包顺延 +0.0.1）
 
 # ============ 检查环境 ============
 def check_env():
@@ -185,6 +185,9 @@ def build():
         "runtime.hardware",
         "runtime.manager",
         "runtime.realtime",
+        "runtime.minimindo",
+        "runtime.minimindo.model_omni",
+        "runtime.minimindo.model_minimind",
         "runtime.memory",
         "runtime.toolagent",
         # M6：Realtime Brain 多组件 / 视觉 / 语音 / Avatar / 平台 / DB / 日志 / 性能 / 并发（函数级惰性 import）

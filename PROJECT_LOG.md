@@ -674,3 +674,12 @@
 - **Telegram / Discord 真实 Bot API**：runtime/platform.py 两个占位类改为真实 httpx 客户端——probe() 用 getMe（Telegram）/users/@me（Discord）验证 token，send() 真实发消息（Telegram sendMessage/sendPhoto、Discord channels/{id}/messages）；token 从环境变量或运行时设置读取，无 token 如实 unavailable；API 地址可经 TELEGRAM_API_BASE / DISCORD_API_BASE 覆盖。用本地假 Bot API 服务器端到端验证 probe/send 均通过。
 - **模型根目录修复**：runtime/get_models_dir() 统一 dev=仓库根 models/、exe=可执行文件旁 sidecar models/；tools/install_models.py 默认 GGUF 链接更新为真实文件名（旧链接 404），并新增 --asr 下载 STT 模型。
 - **验证**：python -m compileall 全绿；隔离启动冒烟：realtime_brain/vision/stt/tts 全部 available，vrc/telegram/discord 无配置时诚实 unavailable 且原因明确；行为回归 s501-s526 26/26、工具类 s081-s090 10/10 全过。
+
+### M8 MiniMind-O 真正运行 + Backend 自动选择 + MicroBenchmark（本次，规格§4/§6/§11/§13/§54）
+- **官方格式查证（不凭空假设）**：`jingyaogong/minimind-o` 官方权重为 PyTorch/transformers（pytorch_model.bin，`minimind-3o` 115M / `-moe` 312M-A115M），无官方 GGUF/ONNX；官方仓库默认分支 master，CPU 即可推理。HF 本机不可达，ModelScope 可达（`gongjy/minimind-3o` 含远程代码 model_omni.py / model_minimind.py），hf-mirror 作兜底。
+- **真实推理后端**：新 `runtime/minimindo/`——`MiniMindOOmniRuntime`（模型自动发现 `models/realtime/` + 下载、加载锁、CPU/CUDA 自动选择、`generate_text()`、内置 MicroBenchmark）+ `model_minimind.py`（官方 verbatim + 来源头）+ `model_omni.py`（官方代码裁剪：去 soundfile/librosa/onnxruntime/numpy 依赖，去 VAD/RealtimeSession，保留文本生成路径，文本推理不需 SenseVoice/SigLIP2/Mimi）。transformers 5.5 动态加载因 funasr/librosa 检查失败 → 用裁剪版，零额外依赖、跨平台最稳。
+- **Backend 自动选择**：`runtime/realtime.py` 新增 `MiniMindOOmniBackend`（id=minimindo-omni）；`build_realtime_backend` 优先级改为官方权重 → GGUF 备选（thinker.gguf 保留）；统一 `_judge_prompt` / `_parse_decision`；probe 不加载模型（防事件循环阻塞与并发损坏）。
+- **MicroBenchmark 实测选路**：`runtime/manager.py` 真实 bench_fn 只实测当前 backend，`select_backend` 按 supported_backends 过滤；本机 CPU 实测 TTFT 44–146ms、tok/s 20–28，vulkan 不再被误选；`/v1/runtime/status` 增加 omni 字段（complete/loaded/backend/ttft/tok_s/measured）。
+- **修复**：status dict 里被塞入运行时对象导致 /v1/runtime/status 500 的 bug（runtime 字段字符串化）。
+- **模型安装器**：`tools/install_models.py` 新增 `--omni [--moe]`（ModelScope 下载 `gongjy/minimind-3o` 到 `models/realtime/minimind-3o/`），check/detect/recommend 同步更新；`.gitignore` 忽略权重文件；`models/README.md` 更新说明。
+- **验证**：真实加载 113.1M 参数 CPU 推理 TTFT 44–146ms / tok/s 20–28；RuntimeManager 集成 provider=minimindo-omni、backend=cpu、measured=True；完整服务隔离启动（QIYU_PORT=8773 + 隔离 QIYU_DATA_DIR）端点冒烟全绿，judge 不可解析时如实回退 Main Brain 并在 reason 附模型原文（不假装实时处理）；`python -m compileall` 全绿。
