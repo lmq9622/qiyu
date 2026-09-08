@@ -4,7 +4,16 @@
 
 ## 当前状态
 
-真实开发机器没有 Unity Editor、Android SDK 和 Quest 设备，因此本目录目前是：
+真实开发机器上已安装 Unity 6000.6.0f1、Android Build Support、Android SDK/NDK 和 OpenJDK，
+并已在 `D:\UnityProjects\QiyuQuestProject` 用官方 URP 模板创建工程。
+
+当前阻塞点：
+
+- Unity 尚未登录/激活 Personal 许可证；
+- Meta XR All-in-One / MRUK 需从 Unity Asset Store 授权安装；
+- 没有连接 Quest 设备。
+
+因此本目录目前仍是：
 
 - 可被 Unity 工程直接引用的 C# 源码；
 - 建议的 `Packages/manifest.json`；

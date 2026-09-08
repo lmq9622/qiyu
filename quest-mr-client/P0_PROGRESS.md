@@ -20,8 +20,11 @@
 - Unity 端源码骨架：
   - `unity-client/Assets/QiyuQuest/Scripts/Networking/`
   - `unity-client/Assets/QiyuQuest/Scripts/Perception/MrukSceneSummary.cs`
+  - `unity-client/Assets/QiyuQuest/Scripts/Perception/MrukWorldStatePublisher.cs`
   - `unity-client/Packages/manifest.example.json`
   - `unity-client/README.md`
+- 本机已安装 Unity Editor 6000.6.0f1 + Android Build Support + OpenJDK + Android SDK/NDK。
+- 已通过官方 URP 模板在 `D:\UnityProjects\QiyuQuestProject` 创建并注册 Unity 工程。
 
 ## 实测结果
 
@@ -42,15 +45,16 @@ python tests/run_tests.py
 
 ## 尚未完成（真实阻塞）
 
-当前机器：
+当前机器仍缺：
 
-- 未安装 Unity Editor；
-- 未安装 Android SDK / Unity Android Build Support；
+- Unity 账号登录与 Personal 许可证激活；
+- Unity Asset Store 中 Meta XR All-in-One / MRUK 的授权安装；
 - 未连接 Quest 设备。
 
 因此以下 P0/P1 内容只能交付“等待 Unity 打开的源码”，不能声称已在真机完成：
 
-- Unity 工程实际创建与 Meta XR / MRUK / Passthrough 包安装；
+- Unity 工程已创建，但 Unity Editor 因无许可证无法打开；
+- Meta XR / MRUK / Passthrough 包安装；
 - MRUK Scene 真机可视化；
 - Passthrough 权限与真机表现；
 - APK 构建；

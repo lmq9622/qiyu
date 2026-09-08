@@ -27,8 +27,11 @@ namespace Qiyu.Quest.Networking
 
         public event Action<QuestEnvelope> OnMessage;
         public event Action<bool> OnConnectionChanged;
+        public event Action SessionEstablished;
 
         public bool IsConnected => _socket != null && _socket.State == WebSocketState.Open;
+        public bool HandshakeDone => _handshakeDone;
+        public string SessionId => _sessionId;
 
         private async void Start()
         {
@@ -133,6 +136,7 @@ namespace Qiyu.Quest.Networking
                     _sessionId = envelope.payload.Value<string>("session_id") ?? envelope.session;
                     _handshakeDone = !string.IsNullOrEmpty(_sessionId);
                     Debug.Log($"[QuestWS] session 建立: {_sessionId}");
+                    SessionEstablished?.Invoke();
                     break;
                 case "server.heartbeat":
                     _lastHeartbeatAt = Time.unscaledTime;
