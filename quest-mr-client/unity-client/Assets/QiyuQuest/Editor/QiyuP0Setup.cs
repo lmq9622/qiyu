@@ -316,6 +316,7 @@ namespace Qiyu.Quest.Editor
             var projector = runtimeRoot.AddComponent<ObjectDetectionProjector>();
             runtimeRoot.AddComponent<QuestPermissionsBootstrap>();
             var debugPanel = runtimeRoot.AddComponent<QuestDebugPanel>();
+            runtimeRoot.AddComponent<PassthroughDiagnostics>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
             if (string.IsNullOrWhiteSpace(serverUrl))

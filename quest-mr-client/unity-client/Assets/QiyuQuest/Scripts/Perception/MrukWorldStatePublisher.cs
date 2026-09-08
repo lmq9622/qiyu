@@ -193,7 +193,9 @@ namespace Qiyu.Quest.Perception
             return new JObject
             {
                 ["id"] = "qiyu_avatar",
-                ["pose"] = PoseToJson(avatarRoot),
+                // AvatarPose.pose 在 schema 里是必填对象；没有角色模型时给空对象用默认值，
+                // 不能给 null（Pydantic 会判定 model_type 错误）。
+                ["pose"] = PoseToJson(avatarRoot) ?? new JObject(),
                 ["visible"] = avatarRoot != null && avatarRoot.gameObject.activeInHierarchy,
                 ["state"] = avatarRoot != null && avatarRoot.gameObject.activeInHierarchy
                     ? "idle" : "hidden"
