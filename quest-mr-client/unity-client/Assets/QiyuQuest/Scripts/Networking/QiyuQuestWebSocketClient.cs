@@ -204,19 +204,30 @@ namespace Qiyu.Quest.Networking
         {
             Debug.Log($"[QuestWS] 已连接 {serverUrl}");
             OnConnectionChanged?.Invoke(true);
-            var hello = new QuestEnvelope("client.hello", JObject.FromObject(new
+            var capabilities = new JArray
             {
-                user_id = userId,
-                char_id = charId,
-                device = deviceName,
-                client_version = clientVersion,
-                capabilities = new[]
-                {
-                    "world_state_v1", "avatar_intent_v1", "spatial_action_v1",
-                    "user.text", "barge_in"
-                }
-            }));
-            _ = SendAsync(hello);
+                "world_state_v1", "avatar_intent_v1", "spatial_action_v1",
+                "user.text", "barge_in"
+            };
+            var payload = new JObject
+            {
+                ["user_id"] = string.IsNullOrWhiteSpace(userId) ? "quest_user" : userId,
+                ["char_id"] = string.IsNullOrWhiteSpace(charId) ? "xiaoban" : charId,
+                ["device"] = deviceName,
+                ["client_version"] = clientVersion,
+                ["capabilities"] = capabilities
+            };
+            var hello = new QuestEnvelope("client.hello", payload);
+            var json = hello.ToJson();
+            Debug.Log($"[QuestWS] hello={json}");
+            if (_socket != null && _socket.State == WebSocketState.Open)
+            {
+                _ = _socket.SendText(json);
+            }
+            else
+            {
+                _ = SendAsync(hello);
+            }
         }
 
         private void HandleMessage(byte[] bytes)

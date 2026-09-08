@@ -58,8 +58,9 @@ namespace Qiyu.Quest.UI
 
         private void Update()
         {
-            if (OVRInput.GetDown(OVRInput.Button.One) ||
-                Input.GetKeyDown(KeyCode.Tab))
+            // 只用手柄 A/X 切换；不要用 UnityEngine.Input，
+            // 本项目启用 Input System package，读旧 Input 会每帧抛异常。
+            if (OVRInput.GetDown(OVRInput.Button.One))
             {
                 visible = !visible;
             }

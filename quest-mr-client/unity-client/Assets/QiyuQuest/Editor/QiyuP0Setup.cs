@@ -93,6 +93,17 @@ namespace Qiyu.Quest.Editor
                 if (projectConfig != null)
                 {
                     projectConfig.isPassthroughCameraAccessEnabled = true;
+                    // MR 必需：Passthrough + Scene + Anchor 必须在项目配置里启用，
+                    // 否则 Meta 的 manifest 预处理器不会写入 PASSTHROUGH / USE_SCENE /
+                    // horizonos.permission.HEADSET_CAMERA，运行时透视层也不会创建。
+                    projectConfig.insightPassthroughEnabled = true;
+                    projectConfig.insightPassthroughSupport =
+                        OVRProjectConfig.FeatureSupport.Required;
+                    projectConfig.sceneSupport =
+                        OVRProjectConfig.FeatureSupport.Required;
+                    projectConfig.anchorSupport = OVRProjectConfig.AnchorSupport.Enabled;
+                    projectConfig.handTrackingSupport =
+                        OVRProjectConfig.HandTrackingSupport.ControllersAndHands;
                     OVRProjectConfig.CommitProjectConfig(projectConfig);
                 }
             }
@@ -213,6 +224,16 @@ namespace Qiyu.Quest.Editor
                 passthrough.overlayType = OVROverlay.OverlayType.Underlay;
                 passthrough.hidden = false;
                 EditorUtility.SetDirty(passthrough);
+
+                // Passthrough 是 Underlay：眼睛相机必须输出透明背景，
+                // 否则 Skybox/不透明黑色会把真实世界完全挡住。
+                var eyeCamera = centerEye.GetComponent<Camera>();
+                if (eyeCamera != null)
+                {
+                    eyeCamera.clearFlags = CameraClearFlags.SolidColor;
+                    eyeCamera.backgroundColor = new Color(0f, 0f, 0f, 0f);
+                    EditorUtility.SetDirty(eyeCamera);
+                }
             }
 
             var runtimeRoot = new GameObject("QiyuP0Runtime");

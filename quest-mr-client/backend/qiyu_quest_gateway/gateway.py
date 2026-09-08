@@ -429,9 +429,12 @@ class QuestWebSocketGateway:
         p = msg.payload or {}
         if str(msg.v) not in SUPPORTED_PROTOCOL_VERSIONS:
             raise EnvelopeError(f"unsupported_protocol_version:{msg.v}")
-        user_id = str(p.get("user_id") or "").strip()
-        char_id = str(p.get("char_id") or "").strip()
+        user_id = str(p.get("user_id") or p.get("userId") or "").strip()
+        char_id = str(p.get("char_id") or p.get("charId") or "").strip()
         if not user_id or not char_id:
+            logger.warning(
+                f"[QuestGateway] invalid_hello payload_keys={sorted(p.keys())} "
+                f"payload={p}")
             await self._send_error(ws, None, "invalid_hello", "user_id 与 char_id 必填")
             raise EnvelopeError("invalid_hello")
         caps = p.get("capabilities")
