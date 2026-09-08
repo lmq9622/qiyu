@@ -336,7 +336,8 @@ namespace Qiyu.Quest.Editor
             }
             var projector = runtimeRoot.AddComponent<ObjectDetectionProjector>();
             runtimeRoot.AddComponent<QuestPermissionsBootstrap>();
-            var debugPanel = runtimeRoot.AddComponent<QuestWorldSpaceUI>();
+            runtimeRoot.AddComponent<QuestAvatarModelImporter>();
+            var debugPanel = runtimeRoot.AddComponent<QiyuMRApp>();
             runtimeRoot.AddComponent<PassthroughDiagnostics>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
@@ -364,9 +365,17 @@ namespace Qiyu.Quest.Editor
             Wire(projector, ("webSocketClient", client), ("cameraAccess", cameraAccess),
                 ("depthAccess", depthAccess), ("sceneSummary", summary),
                 ("worldStatePublisher", publisher));
-            Wire(debugPanel, ("webSocketClient", client), ("microphone", microphone),
-                ("ttsPlayer", ttsPlayer), ("frameSource", frameSource),
-                ("sceneSummary", summary), ("followTarget", centerEye));
+            Wire(debugPanel,
+                ("webSocketClient", client),
+                ("microphone", microphone),
+                ("ttsPlayer", ttsPlayer),
+                ("frameSource", frameSource),
+                ("sceneSummary", summary),
+                ("navMeshBuilder", navMeshBuilder),
+                ("objectDetector", projector),
+                ("avatarRouter", avatarRouter),
+                ("worldStatePublisher", publisher),
+                ("followTarget", centerEye));
 
             var lightObject = new GameObject("Directional Light");
             var light = lightObject.AddComponent<Light>();

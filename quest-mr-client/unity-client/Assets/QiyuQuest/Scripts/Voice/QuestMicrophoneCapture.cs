@@ -37,6 +37,7 @@ namespace Qiyu.Quest.Voice
         [SerializeField] private int preRollMs = 300;
         [Tooltip("TTS 播放中判定用户插话的更高能量阈值")]
         [SerializeField] private float bargeInRmsThreshold = 0.06f;
+        [SerializeField] private float micGain = 1f;
 
         private AudioClip _clip;
         private string _device = "";
@@ -134,6 +135,16 @@ namespace Qiyu.Quest.Voice
             mute = value;
         }
 
+        public void SetVadThreshold(float value)
+        {
+            vadThreshold = Mathf.Clamp(value, 0.005f, 0.2f);
+        }
+
+        public void SetGain(float value)
+        {
+            micGain = Mathf.Clamp(value, 0.2f, 4f);
+        }
+
         private void Update()
         {
             if (!IsCapturing || mute || _clip == null)
@@ -188,7 +199,7 @@ namespace Qiyu.Quest.Voice
             {
                 for (var i = 0; i < count; i++)
                 {
-                    _pending.Add(FloatToPcm16(source[i]));
+                    _pending.Add(FloatToPcm16(source[i] * micGain));
                 }
             }
             else
@@ -206,7 +217,7 @@ namespace Qiyu.Quest.Voice
                         sum += source[j];
                         n++;
                     }
-                    _pending.Add(FloatToPcm16(n > 0 ? sum / n : source[start]));
+                    _pending.Add(FloatToPcm16((n > 0 ? sum / n : source[start]) * micGain));
                 }
             }
             ProcessFrames();

@@ -11,6 +11,7 @@ namespace Qiyu.Quest.Perception
     public class PassthroughDiagnostics : MonoBehaviour
     {
         [SerializeField] private float intervalSeconds = 5f;
+        public static string LastSnapshot { get; private set; } = "";
 
         private void Start()
         {
@@ -35,8 +36,7 @@ namespace Qiyu.Quest.Perception
             var centerEye = GameObject.Find("CenterEyeAnchor");
             var camera = centerEye != null ? centerEye.GetComponent<Camera>() : null;
             var room = MRUK.Instance != null ? MRUK.Instance.GetCurrentRoom() : null;
-            Debug.Log(
-                "[PassthroughDiag] " +
+            LastSnapshot =
                 $"manager={(manager != null)} " +
                 $"wantPT={(manager != null && manager.isInsightPassthroughEnabled)} " +
                 $"supported={OVRManager.IsInsightPassthroughSupported()} " +
@@ -44,7 +44,8 @@ namespace Qiyu.Quest.Perception
                 $"layers={layers.Length}{builder} " +
                 $"camera={(camera != null)} clear={camera?.clearFlags} bg={camera?.backgroundColor} " +
                 $"mrukRoom={(room != null ? room.name : "none")} " +
-                $"anchors={(room != null ? room.Anchors.Count : 0)}");
+                $"anchors={(room != null ? room.Anchors.Count : 0)}";
+            Debug.Log("[PassthroughDiag] " + LastSnapshot);
         }
     }
 }

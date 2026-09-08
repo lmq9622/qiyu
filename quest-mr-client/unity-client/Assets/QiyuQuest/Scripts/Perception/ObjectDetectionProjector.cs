@@ -34,6 +34,9 @@ namespace Qiyu.Quest.Perception
         private bool _hasDepthFrame;
 
         public event Action<List<DetectedObject>> OnObjectsUpdated;
+        public IReadOnlyList<DetectedObject> LastObjects => _lastObjects;
+
+        private readonly List<DetectedObject> _lastObjects = new List<DetectedObject>();
 
         [Serializable]
         public struct DetectedObject
@@ -136,6 +139,8 @@ namespace Qiyu.Quest.Perception
                 QuestObjectRegistry.Set(detected.id, world, detected.label);
             }
             OnObjectsUpdated?.Invoke(results);
+            _lastObjects.Clear();
+            _lastObjects.AddRange(results);
             worldStatePublisher?.SetDetectedObjects(BuildWorldStateObjects(results));
             Debug.Log($"[QuestVision] 投影完成 {results.Count} 个物体 → WorldState");
         }
