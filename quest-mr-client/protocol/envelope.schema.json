@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qiyu.quest.protocol.v1.envelope",
+  "title": "Qiyu Quest Envelope",
+  "description": "Quest 与 Qiyu Gateway 每条 WebSocket 消息的统一封装。",
+  "type": "object",
+  "required": ["v", "id", "type", "ts", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "v": {
+      "const": "1.0.0",
+      "description": "协议版本"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+\\.[a-z0-9_]+$"
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix epoch 毫秒"
+    },
+    "session": {
+      "type": "string",
+      "description": "hello_ack 后必须携带；client.hello 可不带"
+    },
+    "reply_to": {
+      "type": "string"
+    },
+    "payload": {
+      "type": "object"
+    }
+  }
+}

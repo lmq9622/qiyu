@@ -1,0 +1,14 @@
+{
+  "dependencies": {
+    "com.endel.nativewebsocket": "https://github.com/endel/NativeWebSocket.git#upm",
+    "com.unity.ai.navigation": "2.0.9",
+    "com.unity.inputsystem": "1.16.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "com.unity.render-pipelines.universal": "17.0.4",
+    "com.unity.test-framework": "1.6.0",
+    "com.unity.ugui": "2.0.0",
+    "com.unity.xr.management": "4.5.3",
+    "com.unity.xr.meta-openxr": "2.3.0",
+    "com.unity.xr.openxr": "1.16.0"
+  }
+}

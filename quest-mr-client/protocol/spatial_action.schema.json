@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qiyu.quest.protocol.v1.spatial_action",
+  "title": "SpatialAction v1",
+  "description": "LLM/Qiyu 后端输出的高层空间动作，由 Quest Spatial Action Runtime 执行。LLM 不直接控制骨骼。",
+  "type": "object",
+  "required": ["action"],
+  "properties": {
+    "id": { "type": "string" },
+    "ts": { "type": "integer" },
+    "action": {
+      "type": "string",
+      "enum": ["move_to", "approach", "move_away", "face_user", "face_object", "look_at", "play_animation", "interact", "stop"]
+    },
+    "target_id": { "type": "string", "description": "WorldState 中 anchor/object/user id" },
+    "target_position": { "$ref": "common.schema.json#/$defs/vec3" },
+    "anchor": {
+      "enum": ["world", "head", "left_hand", "right_hand", "surface", "object"]
+    },
+    "speed": { "type": "number", "minimum": 0.1, "maximum": 5 },
+    "stop_distance_m": { "type": "number", "minimum": 0 },
+    "min_distance_m": { "type": "number", "minimum": 0 },
+    "face_target": { "type": "boolean", "default": true },
+    "avoid_obstacles": { "type": "boolean", "default": true },
+    "cancel_on_barge_in": { "type": "boolean", "default": true },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "animation": { "type": "string" },
+    "priority": {
+      "type": "integer",
+      "enum": [0, 1, 2, 3],
+      "description": "0 最高；1/2 普通；3 仅在空闲时执行"
+    }
+  }
+}

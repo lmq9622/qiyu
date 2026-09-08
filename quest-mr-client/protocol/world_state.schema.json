@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qiyu.quest.protocol.v1.world_state",
+  "title": "WorldState v1",
+  "description": "Quest 向 Qiyu Gateway 上报的真实房间空间状态。P1 来自 MRUK/Scene Understanding；P4 物体检测只补充 Scene API 未建模物体。",
+  "type": "object",
+  "required": ["protocol_version", "ts", "room_id", "scene_version", "anchors", "user", "avatar"],
+  "properties": {
+    "protocol_version": { "const": "1.0.0" },
+    "ts": { "type": "integer" },
+    "room_id": { "type": "string" },
+    "scene_version": { "type": "integer", "minimum": 1 },
+    "status": {
+      "enum": ["scanning", "ready", "stale", "lost"]
+    },
+    "anchors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/anchor" }
+    },
+    "objects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/object" }
+    },
+    "user": { "$ref": "#/$defs/userPose" },
+    "avatar": { "$ref": "#/$defs/avatarPose" },
+    "navmesh": { "$ref": "#/$defs/navmesh" }
+  },
+  "$defs": {
+    "anchor": {
+      "type": "object",
+      "required": ["id", "label", "pose"],
+      "properties": {
+        "id": { "type": "string", "description": "Quest 内稳定 UUID" },
+        "label": {
+          "enum": ["room", "floor", "wall", "ceiling", "table", "chair", "sofa", "door", "window", "storage", "plant", "screen", "other", "unknown"]
+        },
+        "parent_id": { "type": "string" },
+        "pose": { "$ref": "common.schema.json#/$defs/pose" },
+        "extents": { "$ref": "common.schema.json#/$defs/vec3" },
+        "bounds": { "$ref": "common.schema.json#/$defs/bounds" },
+        "mesh_available": { "type": "boolean" },
+        "updated_at_ms": { "type": "integer" }
+      }
+    },
+    "object": {
+      "type": "object",
+      "required": ["id", "label", "confidence"],
+      "properties": {
+        "id": { "type": "string" },
+        "label": { "type": "string", "description": "例如 cup / phone / laptop；P4 由物体识别补充" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bbox_2d": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4,
+          "description": "x_min,y_min,x_max,y_max 屏幕归一化坐标"
+        },
+        "position": { "$ref": "common.schema.json#/$defs/vec3" },
+        "anchor_id": { "type": "string" },
+        "source": { "enum": ["scene_api", "local_detector", "cloud_vision", "user_placed"] }
+      }
+    },
+    "userPose": {
+      "type": "object",
+      "properties": {
+        "head": { "$ref": "common.schema.json#/$defs/pose" },
+        "left_hand": { "$ref": "common.schema.json#/$defs/pose" },
+        "right_hand": { "$ref": "common.schema.json#/$defs/pose" },
+        "gaze_direction": { "$ref": "common.schema.json#/$defs/vec3" },
+        "source": { "enum": ["headset", "body_tracking", "estimated"] }
+      }
+    },
+    "avatarPose": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "pose": { "$ref": "common.schema.json#/$defs/pose" },
+        "visible": { "type": "boolean" },
+        "state": {
+          "enum": ["idle", "moving", "speaking", "listening", "thinking", "busy", "hidden"]
+        }
+      }
+    },
+    "navmesh": {
+      "type": "object",
+      "properties": {
+        "generated": { "type": "boolean" },
+        "version": { "type": "integer" },
+        "bounds": { "$ref": "common.schema.json#/$defs/bounds" },
+        "walkable_area_m2": { "type": "number" }
+      }
+    }
+  }
+}

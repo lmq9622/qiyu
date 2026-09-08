@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qiyu.quest.protocol.v1.avatar_intent",
+  "title": "AvatarIntent v1",
+  "description": "LLM/Qiyu 后端输出的高层 Avatar 意图，由 Quest Avatar Runtime 解释执行。",
+  "type": "object",
+  "required": ["emotion", "intensity"],
+  "properties": {
+    "id": { "type": "string" },
+    "ts": { "type": "integer" },
+    "emotion": {
+      "type": "string",
+      "enum": ["neutral", "happy", "calm", "sad", "annoyed", "angry", "excited", "shy", "confused", "tired", "surprised"]
+    },
+    "intensity": { "type": "number", "minimum": 0, "maximum": 1 },
+    "expression": { "type": "string", "description": "由 Avatar Runtime 支持映射，例如 smile/blink" },
+    "gesture": { "type": "string", "description": "例如 wave/nod/shake" },
+    "action": {
+      "type": "string",
+      "enum": ["idle", "look_at_user", "look_away", "look_at_object", "nod", "shake", "wave", "lean_in", "sigh", "laugh", "blush"]
+    },
+    "speaking": { "type": "boolean" },
+    "prosody": {
+      "type": "object",
+      "properties": {
+        "speed": { "type": "number" },
+        "pitch": { "type": "number" },
+        "energy": { "type": "number" }
+      }
+    },
+    "text": { "type": "string", "description": "与动作同步的台词，用于口型/字幕" },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "cancel_on_barge_in": { "type": "boolean", "default": true }
+  }
+}
