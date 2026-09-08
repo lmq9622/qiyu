@@ -19,6 +19,7 @@ namespace Qiyu.Quest.UI
         private Action _onClick;
         private Color _normal;
         private Color _hover;
+        private float _targetScale = 1f;
 
         public RectTransform Rect => (RectTransform)transform;
 
@@ -42,7 +43,13 @@ namespace Qiyu.Quest.UI
             {
                 _image.color = hover ? _hover : _normal;
             }
-            transform.localScale = hover ? Vector3.one * 1.03f : Vector3.one;
+            _targetScale = hover ? 1.06f : 1f;
+        }
+
+        private void Update()
+        {
+            transform.localScale = Vector3.Lerp(transform.localScale,
+                Vector3.one * _targetScale, Time.unscaledDeltaTime * 12f);
         }
 
         public void Activate()
@@ -241,11 +248,14 @@ namespace Qiyu.Quest.UI
         [SerializeField] private Transform rightHand;
         [SerializeField] private float maxDistance = 8f;
         [SerializeField] private bool preferController = true;
+        [SerializeField] private bool preferHands = true;
         [SerializeField] private Color rayColor = new Color(1f, 1f, 1f, 0.55f);
 
         private IQiyuUIInteractable _hovered;
         private LineRenderer _line;
         private Transform _dot;
+        private OVRHand[] _hands;
+        private bool _wasPinching;
 
         public static void Register(IQiyuUIInteractable target)
         {
@@ -283,6 +293,8 @@ namespace Qiyu.Quest.UI
                     rightHand = right.transform;
                 }
             }
+            _hands = FindObjectsByType<OVRHand>(FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
             BuildPointer();
         }
 
@@ -337,16 +349,40 @@ namespace Qiyu.Quest.UI
             var origin = Vector3.zero;
             var direction = Vector3.forward;
             var hasRay = false;
-            if (preferController && rightHand != null)
+            var clickPressed = false;
+            OVRHand activeHand = null;
+            if (preferHands && _hands != null)
+            {
+                foreach (var hand in _hands)
+                {
+                    if (hand != null && hand.IsTracked && hand.IsPointerPoseValid)
+                    {
+                        activeHand = hand;
+                        break;
+                    }
+                }
+            }
+            if (activeHand != null)
+            {
+                origin = activeHand.PointerPose.position;
+                direction = activeHand.PointerPose.forward;
+                var pinching = activeHand.GetFingerIsPinching(OVRHand.HandFinger.Index);
+                clickPressed = pinching && !_wasPinching;
+                _wasPinching = pinching;
+                hasRay = true;
+            }
+            else if (preferController && rightHand != null)
             {
                 origin = rightHand.position;
                 direction = rightHand.forward;
+                clickPressed = ControllerClickPressed();
                 hasRay = true;
             }
             else if (head != null)
             {
                 origin = head.position;
                 direction = head.forward;
+                clickPressed = ControllerClickPressed();
                 hasRay = true;
             }
             if (!hasRay)
@@ -410,7 +446,7 @@ namespace Qiyu.Quest.UI
                 }
             }
 
-            if (hitTarget != null && ClickPressed())
+            if (hitTarget != null && clickPressed)
             {
                 if (hitTarget is QiyuUISlider slider)
                 {
@@ -424,7 +460,7 @@ namespace Qiyu.Quest.UI
             }
         }
 
-        private static bool ClickPressed()
+        private static bool ControllerClickPressed()
         {
             return OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger) ||
                    OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger) ||

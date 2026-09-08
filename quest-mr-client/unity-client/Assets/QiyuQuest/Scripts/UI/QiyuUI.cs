@@ -33,6 +33,8 @@ namespace Qiyu.Quest.UI
         public static readonly Color Danger = Hex("#DC2626");
         public static readonly Color Accent = Hex("#F0F0F0");
         public static readonly Color ChipBg = new Color(1f, 1f, 1f, 0.06f);
+        /// <summary>画布像素密度提升后同步放大字号，保证清晰度。</summary>
+        public static float FontScale = 1.45f;
 
         private static Font _font;
         private static readonly Dictionary<string, Sprite> SpriteCache =
@@ -71,9 +73,18 @@ namespace Qiyu.Quest.UI
         public static Sprite RoundedSprite(int radius, Color fill, Color border,
                                            int borderWidth = 2, float alpha = 1f)
         {
+            return RoundedSprite(radius, fill, fill, border, borderWidth, alpha);
+        }
+
+        /// <summary>带纵向渐变的圆角矩形（液态玻璃的主体层次）。</summary>
+        public static Sprite RoundedSprite(int radius, Color top, Color bottom, Color border,
+                                           int borderWidth = 2, float alpha = 1f)
+        {
             radius = Mathf.Max(2, radius);
-            var size = radius * 2 + 6;
-            var key = $"{radius}:{fill}:{border}:{borderWidth}:{alpha}";
+            // 2x 超采样纹理，减少圆角锯齿
+            var texRadius = radius * 2;
+            var size = texRadius * 2 + 8;
+            var key = $"g{radius}:{top}:{bottom}:{border}:{borderWidth}:{alpha}";
             if (SpriteCache.TryGetValue(key, out var cached))
             {
                 return cached;
@@ -84,9 +95,11 @@ namespace Qiyu.Quest.UI
                 wrapMode = TextureWrapMode.Clamp
             };
             var pixels = new Color32[size * size];
-            var r = radius;
+            var r = texRadius;
             for (var y = 0; y < size; y++)
             {
+                var v = size <= 1 ? 0f : y / (float)(size - 1);
+                var baseColor = Color.Lerp(bottom, top, v);
                 for (var x = 0; x < size; x++)
                 {
                     // 距离圆角矩形的有符号距离
@@ -101,7 +114,7 @@ namespace Qiyu.Quest.UI
                     }
                     var borderT = Mathf.Clamp01(1f - Mathf.Abs(dist + borderWidth * 0.5f) /
                                                 Mathf.Max(0.5f, borderWidth * 0.5f));
-                    var color = Color.Lerp(fill, border, borderT);
+                    var color = Color.Lerp(baseColor, border, borderT);
                     color.a *= edge * alpha;
                     pixels[y * size + x] = color;
                 }
@@ -110,7 +123,7 @@ namespace Qiyu.Quest.UI
             tex.Apply();
             var sprite = Sprite.Create(tex, new Rect(0, 0, size, size),
                 new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect,
-                new Vector4(radius, radius, radius, radius));
+                new Vector4(texRadius, texRadius, texRadius, texRadius));
             sprite.name = key;
             SpriteCache[key] = sprite;
             return sprite;
@@ -130,19 +143,45 @@ namespace Qiyu.Quest.UI
             var image = rect.gameObject.AddComponent<Image>();
             var top = strong ? GlassStrongTop : GlassTop;
             var bottom = strong ? GlassStrongBottom : GlassBottom;
-            // 用两层渐变叠加模拟 liquid glass
-            image.sprite = RoundedSprite(radius, bottom, Border, 2);
+            // 1) 投影：3D 果冻立体感的底部阴影
+            var shadow = CreateRect(rect, "Shadow");
+            Stretch(shadow, -8f, -10f);
+            shadow.anchoredPosition = new Vector2(0f, -8f);
+            var shadowImage = shadow.gameObject.AddComponent<Image>();
+            shadowImage.sprite = RoundedSprite(radius + 6,
+                new Color(0f, 0f, 0f, 0.34f), new Color(0f, 0f, 0f, 0.10f),
+                new Color(0f, 0f, 0f, 0f), 0);
+            shadowImage.type = Image.Type.Sliced;
+            shadowImage.raycastTarget = false;
+            shadow.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
+            // 2) 主体：纵向渐变玻璃
+            image.sprite = RoundedSprite(radius, top, bottom, Border, 2);
             image.type = Image.Type.Sliced;
             image.color = Color.white;
+
+            // 3) 顶部高光
             var highlight = CreateRect(rect, "Highlight");
             Stretch(highlight);
             var hi = highlight.gameObject.AddComponent<Image>();
-            hi.sprite = RoundedSprite(radius, new Color(top.r, top.g, top.b, top.a * 0.9f),
-                new Color(1f, 1f, 1f, 0.16f), 2);
+            hi.sprite = RoundedSprite(radius,
+                new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.02f),
+                new Color(1f, 1f, 1f, 0.22f), 2);
             hi.type = Image.Type.Sliced;
             hi.raycastTarget = false;
             var highlightLayout = highlight.gameObject.AddComponent<LayoutElement>();
             highlightLayout.ignoreLayout = true;
+
+            // 4) 左上角果冻高光
+            var gloss = CreateRect(rect, "Gloss");
+            SetAnchored(gloss, new Vector2(0f, 1f), new Vector2(0f, 1f),
+                new Vector2(18f, -110f), new Vector2(360f, -18f));
+            var glossImage = gloss.gameObject.AddComponent<Image>();
+            glossImage.sprite = RoundedSprite(40, new Color(1f, 1f, 1f, 0.10f),
+                new Color(1f, 1f, 1f, 0.0f), new Color(1f, 1f, 1f, 0.14f), 2);
+            glossImage.type = Image.Type.Sliced;
+            glossImage.raycastTarget = false;
+            gloss.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
             return image;
         }
 
@@ -154,7 +193,7 @@ namespace Qiyu.Quest.UI
             var label = rect.gameObject.AddComponent<Text>();
             label.font = Font;
             label.text = text;
-            label.fontSize = size;
+            label.fontSize = Mathf.RoundToInt(size * FontScale);
             label.color = color;
             label.alignment = anchor;
             label.fontStyle = style;

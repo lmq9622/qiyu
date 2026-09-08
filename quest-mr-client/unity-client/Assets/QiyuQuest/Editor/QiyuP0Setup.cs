@@ -199,12 +199,30 @@ namespace Qiyu.Quest.Editor
                 }
                 var serialized = new SerializedObject(asset);
                 var property = serialized.FindProperty("m_AllowPostProcessAlphaOutput");
+                var changed = false;
                 if (property != null && !property.boolValue)
                 {
                     property.boolValue = true;
+                    changed = true;
+                }
+                // 抗锯齿与渲染分辨率：提升 MR UI 清晰度
+                var msaa = serialized.FindProperty("m_MSAA");
+                if (msaa != null && msaa.intValue < 4)
+                {
+                    msaa.intValue = 4;
+                    changed = true;
+                }
+                var renderScale = serialized.FindProperty("m_RenderScale");
+                if (renderScale != null && renderScale.floatValue < 1f)
+                {
+                    renderScale.floatValue = 1f;
+                    changed = true;
+                }
+                if (changed)
+                {
                     serialized.ApplyModifiedPropertiesWithoutUndo();
                     EditorUtility.SetDirty(asset);
-                    Debug.Log($"[QiyuP0Setup] 已开启 URP Alpha Output: {path}");
+                    Debug.Log($"[QiyuP0Setup] URP 已优化（Alpha/MSAA4/RenderScale1）: {path}");
                 }
             }
             AssetDatabase.SaveAssets();
@@ -266,6 +284,10 @@ namespace Qiyu.Quest.Editor
 
             var centerEye = cameraRig.GetComponentsInChildren<Transform>(true)
                 .FirstOrDefault(t => t.name == "CenterEyeAnchor");
+            var leftHandAnchor = cameraRig.GetComponentsInChildren<Transform>(true)
+                .FirstOrDefault(t => t.name == "LeftHandAnchor");
+            var rightHandAnchor = cameraRig.GetComponentsInChildren<Transform>(true)
+                .FirstOrDefault(t => t.name == "RightHandAnchor");
             if (centerEye != null)
             {
                 var passthrough = centerEye.GetComponent<OVRPassthroughLayer>();
@@ -286,6 +308,15 @@ namespace Qiyu.Quest.Editor
                     eyeCamera.backgroundColor = new Color(0f, 0f, 0f, 0f);
                     EditorUtility.SetDirty(eyeCamera);
                 }
+            }
+
+            // 手部追踪：复用 Meta 官方 OVRHandPrefab，供 UI 用手势（捏合）操作。
+            var handPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Packages/com.meta.xr.sdk.core/Prefabs/OVRHandPrefab.prefab");
+            if (handPrefab != null)
+            {
+                AddHandPrefab(handPrefab, leftHandAnchor, "LeftHand", OVRHand.Hand.HandLeft);
+                AddHandPrefab(handPrefab, rightHandAnchor, "RightHand", OVRHand.Hand.HandRight);
             }
 
             var runtimeRoot = new GameObject("QiyuP0Runtime");
@@ -385,6 +416,33 @@ namespace Qiyu.Quest.Editor
 
             EditorSceneManager.SaveScene(scene, ScenePath);
             Selection.activeGameObject = runtimeRoot;
+        }
+
+        private static void AddHandPrefab(GameObject prefab, Transform parent,
+                                          string name, OVRHand.Hand hand)
+        {
+            if (parent == null)
+            {
+                return;
+            }
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
+            instance.name = name;
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            var handComponent = instance.GetComponentInChildren<OVRHand>(true);
+            if (handComponent == null)
+            {
+                Debug.LogWarning($"[QiyuP0Setup] {name} 缺少 OVRHand 组件");
+                return;
+            }
+            var serialized = new SerializedObject(handComponent);
+            var handType = serialized.FindProperty("HandType");
+            if (handType != null)
+            {
+                handType.enumValueIndex = (int)hand;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+            Debug.Log($"[QiyuP0Setup] 已添加手部追踪: {name}");
         }
 
         private static void Wire(UnityEngine.Object target,

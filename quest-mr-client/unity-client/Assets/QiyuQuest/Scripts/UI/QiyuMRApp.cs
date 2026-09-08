@@ -37,6 +37,7 @@ namespace Qiyu.Quest.UI
         [SerializeField] private float distance = 1.9f;
         [SerializeField] private float panelScale = 0.00105f;
         [SerializeField] private bool visible = true;
+        [SerializeField] private bool followUser = false;
 
         private const float CanvasWidth = 1680f;
         private const float CanvasHeight = 1050f;
@@ -84,6 +85,7 @@ namespace Qiyu.Quest.UI
             }
             BuildShell();
             ShowTab("首页");
+            Recenter();
             if (webSocketClient != null)
             {
                 webSocketClient.OnMessage += HandleMessage;
@@ -170,18 +172,40 @@ namespace Qiyu.Quest.UI
 
         private void Update()
         {
-            FollowUser();
+            UpdatePanelTransform();
             UpdateTopBar();
             UpdateActivePanel();
             ScrollWithThumbstick();
+            if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick))
+            {
+                Recenter();
+            }
         }
 
-        private void FollowUser()
+        private void UpdatePanelTransform()
         {
-            if (!visible || followTarget == null || _canvasRect == null)
+            if (!visible || _canvasRect == null)
             {
                 return;
             }
+            if (followUser && followTarget != null)
+            {
+                PlaceInFrontOfUser();
+            }
+        }
+
+        /// <summary>把面板放到用户正前方一次（空间固定，不跟随头部）。</summary>
+        public void Recenter()
+        {
+            if (_canvasRect == null || followTarget == null)
+            {
+                return;
+            }
+            PlaceInFrontOfUser();
+        }
+
+        private void PlaceInFrontOfUser()
+        {
             var forward = followTarget.forward;
             forward.y = 0f;
             if (forward.sqrMagnitude < 0.001f)
@@ -191,7 +215,8 @@ namespace Qiyu.Quest.UI
             forward.Normalize();
             _canvasRect.position = followTarget.position + forward * distance +
                                    Vector3.up * -0.08f;
-            _canvasRect.rotation = Quaternion.LookRotation(-forward, Vector3.up);
+            // Canvas 正面朝 -Z；+Z 指向用户前方，用户看到的是正面。
+            _canvasRect.rotation = Quaternion.LookRotation(forward, Vector3.up);
         }
 
         private void ScrollWithThumbstick()
@@ -307,6 +332,11 @@ namespace Qiyu.Quest.UI
                 QiyuUI.TextTertiary, TextAnchor.MiddleRight);
             QiyuUI.SetAnchored(_sessionText.rectTransform, new Vector2(0.78f, 0), new Vector2(1, 1),
                 Vector2.zero, Vector2.zero);
+            var recenter = QiyuUI.Button(top, "Recenter", "重新居中", Recenter,
+                QiyuUI.ButtonVariant.Glass, 18, 44);
+            QiyuUI.SetAnchored((RectTransform)recenter.transform,
+                new Vector2(0.30f, 0f), new Vector2(0.46f, 0f),
+                new Vector2(0f, 4f), new Vector2(0f, 48f));
 
             // 标签栏
             var tabBar = QiyuUI.CreateRect(canvasObject.transform, "TabBar");
@@ -700,8 +730,12 @@ namespace Qiyu.Quest.UI
                 value => QiyuSettings.CharId = value);
             QiyuUI.Toggle(card.transform, "AutoConnect", "启动时自动连接",
                 QiyuSettings.AutoConnect, value => QiyuSettings.AutoConnect = value);
+            QiyuUI.Toggle(card.transform, "Follow", "面板跟随头部（关闭 = 固定在空间）",
+                followUser, value => followUser = value);
             var connRow = QiyuUI.HBox(card.transform, "ConnRow");
             connRow.gameObject.AddComponent<LayoutElement>().minHeight = 60;
+            QiyuUI.Button(connRow, "Recenter2", "重新居中", Recenter,
+                QiyuUI.ButtonVariant.Glass, 20, 58);
             QiyuUI.Button(connRow, "Apply", "应用并重连", () =>
             {
                 webSocketClient?.SetServerUrl(QiyuSettings.GatewayUrl);
