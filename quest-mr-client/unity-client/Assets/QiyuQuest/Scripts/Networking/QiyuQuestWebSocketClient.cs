@@ -27,6 +27,9 @@ namespace Qiyu.Quest.Networking
         [SerializeField] private bool autoReconnect = true;
         [SerializeField] private float reconnectMinDelaySeconds = 1f;
         [SerializeField] private float reconnectMaxDelaySeconds = 15f;
+        [SerializeField] private bool persistServerUrl = true;
+
+        private const string ServerUrlPrefKey = "qiyu.quest.server_url";
 
         private WebSocket _socket;
         private string _sessionId = "";
@@ -54,8 +57,34 @@ namespace Qiyu.Quest.Networking
 
         private async void Start()
         {
+            if (persistServerUrl)
+            {
+                var saved = PlayerPrefs.GetString(ServerUrlPrefKey, "");
+                if (!string.IsNullOrWhiteSpace(saved))
+                {
+                    serverUrl = saved;
+                }
+            }
             _reconnectDelay = reconnectMinDelaySeconds;
             await ConnectAsync();
+        }
+
+        public void SetServerUrl(string url, bool reconnect = true)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+            serverUrl = url.Trim();
+            if (persistServerUrl)
+            {
+                PlayerPrefs.SetString(ServerUrlPrefKey, serverUrl);
+                PlayerPrefs.Save();
+            }
+            if (reconnect)
+            {
+                _ = ConnectAsync();
+            }
         }
 
         private void Update()

@@ -9,6 +9,7 @@ using Qiyu.Quest.Avatar;
 using Qiyu.Quest.Networking;
 using Qiyu.Quest.Perception;
 using Qiyu.Quest.Spatial;
+using Qiyu.Quest.UI;
 using Qiyu.Quest.Voice;
 using UnityEditor;
 using UnityEditor.Build;
@@ -262,6 +263,7 @@ namespace Qiyu.Quest.Editor
             }
             var projector = runtimeRoot.AddComponent<ObjectDetectionProjector>();
             runtimeRoot.AddComponent<QuestPermissionsBootstrap>();
+            var debugPanel = runtimeRoot.AddComponent<QuestDebugPanel>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
             if (string.IsNullOrWhiteSpace(serverUrl))
@@ -288,6 +290,9 @@ namespace Qiyu.Quest.Editor
             Wire(projector, ("webSocketClient", client), ("cameraAccess", cameraAccess),
                 ("depthAccess", depthAccess), ("sceneSummary", summary),
                 ("worldStatePublisher", publisher));
+            Wire(debugPanel, ("webSocketClient", client), ("microphone", microphone),
+                ("ttsPlayer", ttsPlayer), ("frameSource", frameSource),
+                ("sceneSummary", summary));
 
             var lightObject = new GameObject("Directional Light");
             var light = lightObject.AddComponent<Light>();
