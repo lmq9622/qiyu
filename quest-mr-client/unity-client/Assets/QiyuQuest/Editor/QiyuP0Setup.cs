@@ -157,6 +157,27 @@ namespace Qiyu.Quest.Editor
             {
                 Debug.LogWarning($"[QiyuP0Setup] 未找到 OpenXR Feature Set: {MetaFeatureSetId}");
             }
+
+            // Meta XR Feature 负责初始化 OVRPlugin；没有它 OVRManager.instance 会是 null，
+            // Passthrough / MRUK OpenXR 功能全部不可用（真机实测 manager=False）。
+            // 这里显式启用 Meta 官方 feature（feature set 不一定包含它）。
+            FeatureHelpers.RefreshFeatures(BuildTargetGroup.Android);
+            foreach (var featureId in new[]
+            {
+                "com.meta.openxr.feature.metaxr",
+                "com.meta.openxr.feature.foveation",
+                "com.meta.openxr.feature.subsampledLayout",
+            })
+            {
+                var feature = FeatureHelpers.GetFeatureWithIdForBuildTarget(
+                    BuildTargetGroup.Android, featureId);
+                if (feature != null && !feature.enabled)
+                {
+                    feature.enabled = true;
+                    EditorUtility.SetDirty(feature);
+                    Debug.Log($"[QiyuP0Setup] 已启用 OpenXR Feature: {featureId}");
+                }
+            }
             AssetDatabase.SaveAssets();
         }
 

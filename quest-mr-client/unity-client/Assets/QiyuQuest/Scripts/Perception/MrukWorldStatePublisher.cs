@@ -152,9 +152,28 @@ namespace Qiyu.Quest.Perception
                 ["objects"] = _detectedObjects.DeepClone(),
                 ["user"] = BuildUserPose(),
                 ["avatar"] = BuildAvatarPose(),
-                ["navmesh"] = BuildNavmeshInfo(room)
+                ["navmesh"] = BuildNavmeshInfo(room),
+                ["debug_passthrough"] = BuildPassthroughDebug()
             };
             return payload;
+        }
+
+        private static JObject BuildPassthroughDebug()
+        {
+            var manager = OVRManager.instance;
+            var layers = UnityEngine.Object.FindObjectsByType<OVRPassthroughLayer>(
+                FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var centerEye = GameObject.Find("CenterEyeAnchor");
+            var camera = centerEye != null ? centerEye.GetComponent<Camera>() : null;
+            return new JObject
+            {
+                ["want"] = manager != null && manager.isInsightPassthroughEnabled,
+                ["supported"] = OVRManager.IsInsightPassthroughSupported(),
+                ["initialized"] = OVRManager.IsInsightPassthroughInitialized(),
+                ["layers"] = layers != null ? layers.Length : 0,
+                ["camera_clear"] = camera != null ? camera.clearFlags.ToString() : "none",
+                ["camera_alpha"] = camera != null ? camera.backgroundColor.a : -1f
+            };
         }
 
         private JObject BuildUserPose()

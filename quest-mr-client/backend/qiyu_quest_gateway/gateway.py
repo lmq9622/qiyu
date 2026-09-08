@@ -186,6 +186,9 @@ class QuestWebSocketGateway:
             await self._send_error(ws, session, "bad_world_state",
                                    f"WorldState schema 校验失败: {e}")
             return
+        raw_debug = (msg.payload or {}).get("debug_passthrough")
+        if isinstance(raw_debug, dict):
+            logger.info(f"[QuestGateway] passthrough_debug={raw_debug}")
         normalized = validated.model_dump(mode="json")
         self.registry.update_world_state(session.session_id, normalized)
         self.world_states.update(session.session_id, normalized)
