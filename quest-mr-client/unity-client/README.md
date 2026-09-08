@@ -1,34 +1,73 @@
-# Qiyu Quest Unity Client（P0 源码骨架）
+# Qiyu Quest Unity Client
 
-本目录保存可直接导入 Unity 的 Quest 端源码。
+Quest 3/3S MR 客户端源码（与 `D:\UnityProjects\QiyuQuestProject\Assets\QiyuQuest` 同步）。
 
-## 当前状态
+## 目录
 
-真实开发机器上已安装 Unity 6000.6.0f1、Android Build Support、Android SDK/NDK 和 OpenJDK，
-并已在 `D:\UnityProjects\QiyuQuestProject` 用官方 URP 模板创建工程。
+```text
+Assets/QiyuQuest/
+├── Editor/QiyuP0Setup.cs                  # 一键配置 Player/OpenXR/权限 + 建场景 + 构建 APK
+├── Editor/Templates/launcherTemplate.gradle
+├── Scripts/Networking/
+│   ├── QuestEnvelope.cs                   # Protocol v1 JSON Envelope
+│   ├── QuestBinaryProtocol.cs             # Protocol v1 二进制帧
+│   └── QiyuQuestWebSocketClient.cs        # 握手/心跳/重连/分发/二进制发送
+├── Scripts/Perception/
+│   ├── MrukSceneSummary.cs                # MRUK 房间语义汇总 + HUD
+│   ├── MrukWorldStatePublisher.cs         # WorldState v1 上报
+│   ├── PassthroughFrameSource.cs          # Meta Passthrough Camera → JPEG
+│   ├── ObjectDetectionProjector.cs        # 2D 框 → 深度/射线 → 世界坐标
+│   └── QuestPermissionsBootstrap.cs       # Scene/麦克风/相机权限
+├── Scripts/Voice/
+│   ├── QuestMicrophoneCapture.cs          # 48k→16k + 能量 VAD + 二进制上行
+│   ├── QuestTtsPlayer.cs                  # 流式 PCM 播放 + RMS 口型
+│   └── QuestVoiceLoop.cs                  # 语音闭环 + barge-in
+├── Scripts/Avatar/
+│   ├── AvatarIntentRouter.cs              # avatar.intent / spatial.action 分发
+│   ├── BlendShapeAvatarDriver.cs          # 情绪 → BlendShape，音频 → 口型
+│   └── AvatarLookController.cs            # 头部/上身看向
+└── Scripts/Spatial/
+    ├── RoomNavMeshBuilder.cs              # MRUK 语义 → 运行时 NavMesh
+    ├── SpatialActionExecutor.cs           # NavMeshAgent 执行高层动作
+    └── QuestObjectRegistry.cs             # 检测物体世界坐标注册表
+```
 
-当前阻塞点：
+## 依赖
 
-- Unity 尚未登录/激活 Personal 许可证；
-- Meta XR All-in-One / MRUK 需从 Unity Asset Store 授权安装；
-- 没有连接 Quest 设备。
+- Unity 6000.6.0f1 + URP
+- `com.meta.xr.sdk.core` 205.0.0（Meta SDK License）
+- `com.meta.xr.mrutilitykit` 205.0.0（Meta SDK License）
+- `com.unity.xr.meta-openxr` + `com.unity.xr.openxr`
+- `com.endel.nativewebsocket`（MIT，本地包）
+- Newtonsoft Json、Unity AI Navigation
 
-因此本目录目前仍是：
+## 一键配置与构建
 
-- 可被 Unity 工程直接引用的 C# 源码；
-- 建议的 `Packages/manifest.json`；
-- 打开 Unity 后需要完成的 Meta SDK / 场景搭建步骤。
+Unity 菜单：`Qiyu/Setup P0 Quest Scene`、`Qiyu/Build P0 APK`。
 
-不允许把该状态描述为“已在真机验证”。
+命令行：
 
-## 首次打开 Unity 后的步骤
+```powershell
+$env:JAVA_HOME='D:\Unity\Hub\Editor\6000.6.0f1\Editor\Data\PlaybackEngines\AndroidPlayer\OpenJDK'
+$env:ANDROID_SDK_ROOT='D:\Unity\Hub\Editor\6000.6.0f1\Editor\Data\PlaybackEngines\AndroidPlayer\SDK'
+$env:ANDROID_NDK_ROOT='D:\Unity\Hub\Editor\6000.6.0f1\Editor\Data\PlaybackEngines\AndroidPlayer\NDK'
+& 'D:\Unity\Hub\Editor\6000.6.0f1\Editor\Unity.exe' -batchmode -nographics -quit `
+  -projectPath 'D:\UnityProjects\QiyuQuestProject' `
+  -executeMethod Qiyu.Quest.Editor.QiyuP0Setup.BuildP0Apk `
+  -logFile 'D:\UnityProjects\QiyuQuestProject\Logs\p0_build.log'
+```
 
-1. 新建 Unity 6 URP 空工程。
-2. 将本目录 `Assets/QiyuQuest/` 复制进工程。
-3. 按 `manifest.example.json` 安装 NativeWebSocket、Newtonsoft JSON、Unity AI Navigation 等包。
-4. 从 Unity Asset Store 安装 **Meta XR All-in-One SDK**，再按官方指引安装 MRUK / Passthrough Camera API。
-5. 在场景中放 `QiyuQuestWebSocketClient`，配置 `serverUrl = ws://<Qiyu主机IP>:8766/v1/quest/ws`。
-6. 运行 `python quest_server.py` 启动 Qiyu Gateway。
-7. Quest 与 PC 同局域网，Build & Run 后验证 hello/heartbeat/echo。
+默认 Gateway 地址：`ws://<Qiyu主机IP>:8766/v1/quest/ws`，
+可用环境变量 `QIYU_QUEST_WS_URL` 覆盖。
 
-MRUK Scene 可视化、WorldState v1 聚合、Passthrough 权限验证属于 P1，必须在 Unity 编辑器可用后真实完成。
+## 真机验收清单
+
+1. `adb install -r Builds\QiyuQuestP0.apk`
+2. 授权 Scene / 麦克风 / Passthrough Camera 权限
+3. 确认 MRUK 房间语义与 EffectMesh 显示
+4. 确认 hello/heartbeat/world_state ACK
+5. 说一句话，确认 `server.voice_transcript` → `agent.speech` → TTS 播放
+6. TTS 播放中插话，确认 barge-in
+7. 让角色靠近/看向桌子，确认 NavMesh 与避障
+
+> 当前机器未连接 Quest，以上真机项尚未验收；不要把源码完成等同于真机通过。

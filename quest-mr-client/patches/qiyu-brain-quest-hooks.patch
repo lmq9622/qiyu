@@ -1,0 +1,61 @@
+Quest MR 对现有 Qiyu 大脑链路的三处最小 hook
+=================================================
+
+原则：默认行为不变；不传 Quest 上下文字段时，现有 Web/微信/主动消息链路完全不受影响。
+本补丁已应用到当前工作树，单独导出用于代码审查与在其他部署上复现。
+
+--- a/runtime/brain/pipeline.py
++++ b/runtime/brain/pipeline.py
+@@ -131,6 +131,10 @@ class BrainPipeline:
+             brain_ctx = decision_to_main_context(decision)
++            # Quest MR 等外部入口可注入额外真实上下文（默认不存在，不影响既有链路）
++            extra_ctx = str(ctx.get("_extra_brain_context") or "").strip()
++            if extra_ctx:
++                brain_ctx = f"{brain_ctx}\n\n{extra_ctx}"
+             if tool_evidence is not None:
+
+--- a/demo.py
++++ b/demo.py
+@@ -1125,7 +1125,8 @@ async def _pipeline_web_chat_payload(
+ async def _pipeline_web_chat_payload(user_id: str, char_id: str, temperature: float,
+                                      llm_messages: list, user_texts: list[str],
+                                      images: list, skip_user_write: bool = False,
+-                                     on_event=None) -> dict:
++                                     on_event=None,
++                                     extra_context: Optional[dict] = None) -> dict:
+@@ -1180,6 +1181,8 @@ async def _pipeline_web_chat_payload(
+         "_llm_messages": llm_messages,
+     }
++    if extra_context:
++        context.update(dict(extra_context))
+
+--- a/companion/llm.py
++++ b/companion/llm.py
+@@ -465,6 +465,16 @@ class LLMClient(MainBrainProvider):
+     async def summarize_text(self, prompt: str, max_tokens: int = 800) -> str:
+         """记忆流水线用：无上下文的独立 LLM 调用（压缩/提事实）"""
+         system_msg = "你是后台记忆整理器，只输出整理结果本身，不解释、不客套。"
+         return await self._call_real_llm(system_msg, [{"role": "user", "content": prompt}], 0.3)
++
++    async def complete_json(self, system_prompt: str, user_prompt: str,
++                            temperature: float = 0.2) -> str:
++        """Quest MR 等结构化规划用：独立、不注入记忆/RAG 的原始 LLM 调用。
++
++        与 summarize_text 一样只复用现有 LLM 通道，不创建新 Agent 系统；
++        调用方负责校验 JSON schema。
++        """
++        if not self.available:
++            raise HTTPException(503, "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称。")
++        return await self._call_real_llm(
++            system_prompt, [{"role": "user", "content": user_prompt}], temperature)
+
+说明
+----
+
+1. `pipeline.py` 的 hook 让 `_extra_brain_context` 追加到 MainBrain 的内部
+   `brain_ctx`；不传该 key 时行为与原来完全一致。
+2. `demo.py` 的 hook 只给 Quest 入口多传一个可选 context；
+   现有 Web/SSE/微信调用方不传，行为不变。
+3. `llm.py` 的 `complete_json` 是新方法，不改任何现有方法。
+4. Quest Gateway 复用现有 `demo._pipeline_web_chat_payload`，
+   因此 MessageGateway → BrainPipeline → MiniMind-O → MainBrain 主链路不变。

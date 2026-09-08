@@ -5,16 +5,19 @@ using UnityEngine;
 namespace Qiyu.Quest.Perception
 {
     /// <summary>
-    /// 直接复用 MRUK：显示当前房间语义数量并暴露统计事件。
-    /// 这是 P1 WorldState 聚合的输入源，不自行实现房间理解。
+    /// 直接复用 MRUK：汇总当前房间语义数量并在 HUD 显示。
+    /// 这是 WorldState 聚合的输入源，不自行实现房间理解。
     /// </summary>
     public class MrukSceneSummary : MonoBehaviour
     {
-        private bool _started;
+        [SerializeField] private bool showHud = true;
+        [SerializeField] private Vector2 hudOrigin = new Vector2(16f, 16f);
+
         private string _summary = "MRUK 未就绪";
         private MRUKRoom _room;
 
         public MRUKRoom CurrentRoom => _room;
+        public string Summary => _summary;
 
         public delegate void SummaryChangedHandler(string summary, MRUKRoom room);
         public event SummaryChangedHandler OnSummaryChanged;
@@ -59,20 +62,23 @@ namespace Qiyu.Quest.Perception
                 counts[label] = counts.GetValueOrDefault(label) + 1;
             }
 
+            var bounds = _room.GetRoomBounds();
             var parts = new List<string>
             {
-                $"房间={_room.name}",
-                $"语义锚点={_room.Anchors.Count}",
-                $"墙={_room.WallAnchors.Count}",
-                $"地面={( _room.FloorAnchor != null ? 1 : 0)}",
-                $"天花板={( _room.CeilingAnchor != null ? 1 : 0)}",
-                $"座位={_room.SeatPoses.Count}"
+                $"房间: {_room.name}",
+                $"语义锚点: {_room.Anchors.Count}",
+                $"墙: {_room.WallAnchors.Count}",
+                $"地面: {_room.FloorAnchors.Count}",
+                $"天花板: {_room.CeilingAnchors.Count}",
+                $"房间尺寸: {bounds.size.x:F1} x {bounds.size.y:F1} x {bounds.size.z:F1} m",
+                $"座位: {_room.SeatPoses.Count}"
             };
             foreach (var kv in counts)
             {
-                if (!kv.Key.Contains("FLOOR") && !kv.Key.Contains("CEILING") && !kv.Key.Contains("WALL_FACE"))
+                if (!kv.Key.Contains("FLOOR") && !kv.Key.Contains("CEILING") &&
+                    !kv.Key.Contains("WALL_FACE"))
                 {
-                    parts.Add($"{kv.Key}={kv.Value}");
+                    parts.Add($"{kv.Key}: {kv.Value}");
                 }
             }
             _summary = string.Join("\n", parts);
@@ -82,7 +88,16 @@ namespace Qiyu.Quest.Perception
 
         private void OnGUI()
         {
-            GUI.Label(new Rect(16, 16, 800, 420), _summary);
+            if (!showHud)
+            {
+                return;
+            }
+            var style = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 18,
+                normal = { textColor = Color.white }
+            };
+            GUI.Label(new Rect(hudOrigin.x, hudOrigin.y, 900f, 420f), _summary, style);
         }
 
         private void OnDestroy()

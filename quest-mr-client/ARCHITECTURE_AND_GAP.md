@@ -1,6 +1,8 @@
 # Qiyu Quest MR 客户端 · 分支架构与差距分析
 
-> 当前阶段：方案确认后的架构细化，尚未开始 Unity/后端实现。
+> ⚠️ 本文是最初的架构与差距分析（实现前）。
+> P0–P6 的实现状态、复用清单、真机待验收项请以
+> [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) 为准。
 
 ## 1. 分支结构建议
 

@@ -8,8 +8,9 @@ using UnityEngine;
 namespace Qiyu.Quest.Networking
 {
     /// <summary>
-    /// 复用 NativeWebSocket（MIT），不自行实现底层 WebSocket。
-    /// P0 只实现 hello/heartbeat/echo/bye；其余消息由后续 Handler 扩展。
+    /// Quest ↔ Qiyu Gateway 协议 v1 客户端。
+    /// 复用 NativeWebSocket（MIT），不自行实现底层 WebSocket；
+    /// 负责握手、心跳、自动重连、barge_in 与消息分发。
     /// </summary>
     public class QiyuQuestWebSocketClient : MonoBehaviour
     {
@@ -18,23 +19,42 @@ namespace Qiyu.Quest.Networking
             "ws://192.168.1.100:8766/v1/quest/ws";
         [SerializeField] private string userId = "quest_user";
         [SerializeField] private string charId = "xiaoban";
+        [SerializeField] private string deviceName = "meta-quest-3";
+        [SerializeField] private string clientVersion = "0.2.0";
+
+        [Header("心跳与重连")]
         [SerializeField] private float heartbeatIntervalSeconds = 5f;
+        [SerializeField] private bool autoReconnect = true;
+        [SerializeField] private float reconnectMinDelaySeconds = 1f;
+        [SerializeField] private float reconnectMaxDelaySeconds = 15f;
 
         private WebSocket _socket;
         private string _sessionId = "";
         private bool _handshakeDone;
         private float _lastHeartbeatAt;
+        private float _nextReconnectAt;
+        private float _reconnectDelay;
+        private bool _connecting;
+        private bool _quitting;
 
         public event Action<QuestEnvelope> OnMessage;
         public event Action<bool> OnConnectionChanged;
         public event Action SessionEstablished;
+        public event Action<JObject> OnAgentSpeech;
+        public event Action<JObject> OnAvatarIntent;
+        public event Action<JObject> OnSpatialAction;
+        public event Action<JObject> OnServerAck;
+        /// <summary>二进制帧：payload, kind, seq</summary>
+        public event Action<byte[], byte, uint> OnBinaryFrame;
 
         public bool IsConnected => _socket != null && _socket.State == WebSocketState.Open;
         public bool HandshakeDone => _handshakeDone;
         public string SessionId => _sessionId;
+        public string ServerUrl => serverUrl;
 
         private async void Start()
         {
+            _reconnectDelay = reconnectMinDelaySeconds;
             await ConnectAsync();
         }
 
@@ -47,21 +67,40 @@ namespace Qiyu.Quest.Networking
             }
 #endif
             TrySendHeartbeat();
+            TryReconnect();
         }
 
         public async Task ConnectAsync()
         {
-            await DisconnectAsync();
-            _socket = new WebSocket(serverUrl);
-            _socket.OnOpen += HandleOpen;
-            _socket.OnMessage += HandleMessage;
-            _socket.OnError += HandleError;
-            _socket.OnClose += HandleClose;
-            OnConnectionChanged?.Invoke(false);
-            await _socket.Connect();
+            if (_connecting)
+            {
+                return;
+            }
+            _connecting = true;
+            try
+            {
+                await DisconnectAsync(sendBye: false);
+                _socket = new WebSocket(serverUrl);
+                _socket.OnOpen += HandleOpen;
+                _socket.OnMessage += HandleMessage;
+                _socket.OnError += HandleError;
+                _socket.OnClose += HandleClose;
+                OnConnectionChanged?.Invoke(false);
+                await _socket.Connect();
+                _reconnectDelay = reconnectMinDelaySeconds;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[QuestWS] 连接失败: {e.Message}");
+                ScheduleReconnect();
+            }
+            finally
+            {
+                _connecting = false;
+            }
         }
 
-        public async Task DisconnectAsync()
+        public async Task DisconnectAsync(bool sendBye = true)
         {
             if (_socket == null)
             {
@@ -69,12 +108,10 @@ namespace Qiyu.Quest.Networking
             }
             try
             {
-                if (_socket.State == WebSocketState.Open && !string.IsNullOrEmpty(_sessionId))
+                if (sendBye && _socket.State == WebSocketState.Open &&
+                    !string.IsNullOrEmpty(_sessionId))
                 {
-                    var bye = new QuestEnvelope(
-                        "client.bye",
-                        new JObject(),
-                        _sessionId);
+                    var bye = new QuestEnvelope("client.bye", new JObject(), _sessionId);
                     await SendAsync(bye);
                 }
                 await _socket.Close();
@@ -98,27 +135,74 @@ namespace Qiyu.Quest.Networking
             return _socket.SendText(envelope.ToJson());
         }
 
+        public Task SendUserTextAsync(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return Task.CompletedTask;
+            }
+            var payload = new JObject { ["text"] = text };
+            return SendAsync(new QuestEnvelope("user.text", payload, _sessionId));
+        }
+
+        public Task SendBargeInAsync(string reason = "")
+        {
+            var payload = new JObject { ["reason"] = reason ?? "" };
+            return SendAsync(new QuestEnvelope("client.barge_in", payload, _sessionId));
+        }
+
+        public Task SendWorldStateAsync(JObject worldState)
+        {
+            return SendAsync(new QuestEnvelope("client.world_state",
+                worldState ?? new JObject(), _sessionId));
+        }
+
+        public Task SendBinaryAsync(byte[] data)
+        {
+            if (data == null || data.Length == 0)
+            {
+                return Task.CompletedTask;
+            }
+            if (_socket == null || _socket.State != WebSocketState.Open)
+            {
+                Debug.LogWarning("[QuestWS] 连接未打开，丢弃二进制帧");
+                return Task.CompletedTask;
+            }
+            return _socket.Send(data);
+        }
+
         private void HandleOpen()
         {
-            Debug.Log("[QuestWS] 已连接");
+            Debug.Log($"[QuestWS] 已连接 {serverUrl}");
             OnConnectionChanged?.Invoke(true);
             var hello = new QuestEnvelope("client.hello", JObject.FromObject(new
             {
                 user_id = userId,
                 char_id = charId,
-                device = "meta-quest-3",
-                client_version = "0.0.1",
-                capabilities = new[] { "world_state_v1" }
+                device = deviceName,
+                client_version = clientVersion,
+                capabilities = new[]
+                {
+                    "world_state_v1", "avatar_intent_v1", "spatial_action_v1",
+                    "user.text", "barge_in"
+                }
             }));
             _ = SendAsync(hello);
         }
 
         private void HandleMessage(byte[] bytes)
         {
-            string json;
+            if (bytes != null && bytes.Length >= 2 && bytes[0] == (byte)'Q' && bytes[1] == (byte)'Y')
+            {
+                if (QuestBinaryProtocol.TryUnpack(bytes, out var kind, out var seq, out var payload))
+                {
+                    OnBinaryFrame?.Invoke(payload, kind, seq);
+                }
+                return;
+            }
             try
             {
-                json = Encoding.UTF8.GetString(bytes);
+                var json = Encoding.UTF8.GetString(bytes);
                 var envelope = QuestEnvelope.FromJson(json);
                 Dispatch(envelope);
             }
@@ -140,6 +224,18 @@ namespace Qiyu.Quest.Networking
                     break;
                 case "server.heartbeat":
                     _lastHeartbeatAt = Time.unscaledTime;
+                    break;
+                case "agent.speech":
+                    OnAgentSpeech?.Invoke(envelope.payload);
+                    break;
+                case "avatar.intent":
+                    OnAvatarIntent?.Invoke(envelope.payload);
+                    break;
+                case "spatial.action":
+                    OnSpatialAction?.Invoke(envelope.payload);
+                    break;
+                case "server.ack":
+                    OnServerAck?.Invoke(envelope.payload);
                     break;
                 case "server.error":
                     Debug.LogWarning(
@@ -164,9 +260,34 @@ namespace Qiyu.Quest.Networking
             _ = SendAsync(new QuestEnvelope("client.heartbeat", new JObject(), _sessionId));
         }
 
+        private void TryReconnect()
+        {
+            if (!autoReconnect || _quitting || _connecting || IsConnected)
+            {
+                return;
+            }
+            if (Time.unscaledTime < _nextReconnectAt)
+            {
+                return;
+            }
+            Debug.Log($"[QuestWS] 尝试重连（{_reconnectDelay:F1}s 退避）");
+            _ = ConnectAsync();
+        }
+
+        private void ScheduleReconnect()
+        {
+            if (!autoReconnect || _quitting)
+            {
+                return;
+            }
+            _nextReconnectAt = Time.unscaledTime + _reconnectDelay;
+            _reconnectDelay = Mathf.Min(_reconnectDelay * 1.7f, reconnectMaxDelaySeconds);
+        }
+
         private void HandleError(string error)
         {
             Debug.LogError($"[QuestWS] 错误: {error}");
+            ScheduleReconnect();
         }
 
         private void HandleClose(WebSocketCloseCode code)
@@ -175,11 +296,18 @@ namespace Qiyu.Quest.Networking
             _sessionId = "";
             _handshakeDone = false;
             OnConnectionChanged?.Invoke(false);
+            ScheduleReconnect();
         }
 
         private async void OnApplicationQuit()
         {
+            _quitting = true;
             await DisconnectAsync();
+        }
+
+        private void OnDestroy()
+        {
+            _quitting = true;
         }
     }
 }

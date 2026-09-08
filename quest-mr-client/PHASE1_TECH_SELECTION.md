@@ -1,6 +1,7 @@
 # Qiyu Meta Quest MR 客户端 · 第一阶段技术选型
 
-> 状态：调研完成，等待确认后再进入实现。
+> 状态：调研完成；方案已确认并进入实现（P0–P6 见
+> [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)）。
 > 当前分支：`quest-mr-client`
 > 目标目录：`ai-companion/quest-mr-client/`
 

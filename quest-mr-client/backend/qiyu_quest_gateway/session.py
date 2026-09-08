@@ -1,10 +1,13 @@
 """Quest session 注册表。"""
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
+
+from qiyu_quest_gateway.audio import AudioTurnBuffer
 
 
 @dataclass
@@ -20,6 +23,16 @@ class QuestSession:
     last_seen_at: float = field(default_factory=time.time)
     remote: str = ""
     world_state: Optional[dict] = None
+    # 并发回合控制：同一 session 同时只跑一轮对话，新一轮/打断会取消旧轮。
+    turn_task: Optional[asyncio.Task] = None
+    barge_in_epoch: int = 0
+    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    audio_buffer: AudioTurnBuffer = field(default_factory=AudioTurnBuffer)
+    latest_vision_frame: Optional[bytes] = None
+    vision_meta: dict = field(default_factory=dict)
+    pending_vision_text: str = ""
+    pending_vision_request: Optional[object] = None
+    tts_enabled: bool = True
 
     def to_public_dict(self) -> dict:
         return {

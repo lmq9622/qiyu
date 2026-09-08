@@ -1,5 +1,8 @@
 # P0 进度与实测记录
 
+> ⚠️ 本文记录的是 P0 当时的中间状态，已过期。
+> 最新 P0–P6 状态请以 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) 为准。
+
 ## 已完成
 
 - 冻结 Quest Protocol v1：
