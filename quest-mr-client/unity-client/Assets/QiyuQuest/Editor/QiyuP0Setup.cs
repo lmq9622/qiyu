@@ -18,6 +18,7 @@ using UnityEditor.XR.Management;
 using UnityEditor.XR.Management.Metadata;
 using UnityEditor.XR.OpenXR.Features;
 using UnityEngine;
+using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
 using UnityEngine.XR.Management;
 
@@ -35,6 +36,7 @@ namespace Qiyu.Quest.Editor
         {
             ConfigurePlayer();
             ConfigureOpenXR();
+            ConfigureRenderPipelineForPassthrough();
             EnsureAndroidGradleTemplate();
             CreateScene();
             ConfigureBuildSettings();
@@ -154,6 +156,35 @@ namespace Qiyu.Quest.Editor
             else
             {
                 Debug.LogWarning($"[QiyuP0Setup] 未找到 OpenXR Feature Set: {MetaFeatureSetId}");
+            }
+            AssetDatabase.SaveAssets();
+        }
+
+        /// <summary>
+        /// Passthrough Underlay 依赖眼睛缓冲区的 alpha=0。
+        /// URP 默认关闭 "Allow Post Process Alpha Output"，会把 alpha 强制为 1，
+        /// 导致真实世界被完全遮住（表现为纯黑）。这里为所有 URP Asset 打开。
+        /// </summary>
+        private static void ConfigureRenderPipelineForPassthrough()
+        {
+            var guids = AssetDatabase.FindAssets("t:UniversalRenderPipelineAsset");
+            foreach (var guid in guids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                var asset = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(path);
+                if (asset == null)
+                {
+                    continue;
+                }
+                var serialized = new SerializedObject(asset);
+                var property = serialized.FindProperty("m_AllowPostProcessAlphaOutput");
+                if (property != null && !property.boolValue)
+                {
+                    property.boolValue = true;
+                    serialized.ApplyModifiedPropertiesWithoutUndo();
+                    EditorUtility.SetDirty(asset);
+                    Debug.Log($"[QiyuP0Setup] 已开启 URP Alpha Output: {path}");
+                }
             }
             AssetDatabase.SaveAssets();
         }
