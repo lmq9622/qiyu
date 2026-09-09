@@ -43,6 +43,7 @@ namespace Qiyu.Quest.Perception
         private Matrix4x4[] _pointMatrices;
         private int _pointCount;
         private float _nextDepthBuildAt;
+        private float _nextDepthRequestAt;
         private int _depthFrameCount;
         private bool _depthAvailable;
 
@@ -128,6 +129,12 @@ namespace Qiyu.Quest.Perception
 
         private void LateUpdate()
         {
+            if (showDepthCloud && depthAccess != null &&
+                Time.unscaledTime >= _nextDepthRequestAt)
+            {
+                _nextDepthRequestAt = Time.unscaledTime + 0.15f;
+                depthAccess.RequestDepthSample();
+            }
             if (!showDepthCloud || _pointCount <= 0 || _quadMesh == null || _pointMaterial == null)
             {
                 return;
@@ -147,7 +154,8 @@ namespace Qiyu.Quest.Perception
             if (effectMesh != null)
             {
                 effectMesh.HideMesh = !showRoomMesh;
-                effectMesh.ToggleEffectMeshVisibility(showRoomMesh);
+                effectMesh.ToggleEffectMeshVisibility(showRoomMesh, default,
+                    GetMaterial(new Color(0.20f, 0.72f, 1f)));
             }
             foreach (var visual in _anchorVisuals)
             {
