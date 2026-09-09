@@ -539,10 +539,17 @@ namespace Qiyu.Quest.UI
             layout.spacing = spacing;
             layout.padding = new RectOffset(padding, padding, padding, padding);
             layout.childControlWidth = true;
-            layout.childControlHeight = true;
+            layout.childControlHeight = false;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
             layout.childAlignment = TextAnchor.UpperCenter;
+            // 高度按内容自适应；宽度由父级 ScrollView 视口控制。
+            var fitter = panel.gameObject.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            var layoutElement = panel.gameObject.AddComponent<LayoutElement>();
+            layoutElement.flexibleWidth = 1f;
+            layoutElement.minWidth = 0f;
             return panel;
         }
 

@@ -69,6 +69,7 @@ namespace Qiyu.Quest.UI
         private Vector3 _panelFollowVelocity;
         private bool _panelPoseInitialized;
         private readonly RaycastHit[] _roomHits = new RaycastHit[32];
+        private float _nextPanelAvoidLogAt;
 
         private TMP_Text _connText;
         private Image _connDot;
@@ -274,6 +275,17 @@ namespace Qiyu.Quest.UI
                        Vector3.up * -0.06f;
             // Canvas 正面朝 -Z；+Z 指向用户前方，用户看到的是正面。
             rotation = Quaternion.LookRotation(forward, Vector3.up);
+            // 房间 bounds 兜底：即使射线没命中，也不让面板中心跑到房间外。
+            var room = sceneSummary != null ? sceneSummary.CurrentRoom : null;
+            if (room != null)
+            {
+                var bounds = room.GetRoomBounds();
+                bounds.Expand(-0.25f);
+                if (!bounds.Contains(position))
+                {
+                    position = bounds.ClosestPoint(position);
+                }
+            }
         }
 
         /// <summary>
@@ -311,6 +323,13 @@ namespace Qiyu.Quest.UI
                 if (TryGetRoomHit(head, direction, distance, playerRoot, out var hit))
                 {
                     resolved = Mathf.Min(resolved, hit.distance - 0.25f);
+                    if (Time.unscaledTime >= _nextPanelAvoidLogAt)
+                    {
+                        _nextPanelAvoidLogAt = Time.unscaledTime + 1f;
+                        Debug.Log($"[PanelAvoid] desired={desired:F2} " +
+                                  $"hit={hit.collider.name} dist={hit.distance:F2} " +
+                                  $"resolved={resolved:F2}");
+                    }
                 }
             }
             return Mathf.Clamp(resolved, 0.7f, desired);
