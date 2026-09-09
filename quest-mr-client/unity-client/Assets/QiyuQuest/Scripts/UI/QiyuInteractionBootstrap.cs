@@ -100,7 +100,15 @@ namespace Qiyu.Quest.UI
             {
                 material.SetFloat("_ZWrite", 0f);
             }
-            material.renderQueue = 3000;
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.SetInt("_SrcBlend",
+                (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            material.SetInt("_DstBlend",
+                (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            material.SetInt("_ZWrite", 0);
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
             return material;
         }
     }

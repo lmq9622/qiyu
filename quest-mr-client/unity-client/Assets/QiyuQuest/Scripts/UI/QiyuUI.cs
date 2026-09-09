@@ -211,7 +211,8 @@ namespace Qiyu.Quest.UI
             content.anchoredPosition = Vector2.zero;
             var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.spacing = spacing;
-            layout.padding = new RectOffset(2, 2, 2, 24);
+            // 左右留 20px：避免卡片圆角/阴影正好贴在 ScrollRect Mask 边缘被裁掉。
+            layout.padding = new RectOffset(20, 20, 4, 24);
             layout.childControlWidth = true;
             layout.childControlHeight = false;
             layout.childForceExpandWidth = true;

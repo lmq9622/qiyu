@@ -408,6 +408,8 @@ namespace Qiyu.Quest.Editor
             var effectMesh = runtimeRoot.AddComponent<EffectMesh>();
             effectMesh.MeshMaterial = AssetDatabase.LoadAssetAtPath<Material>(
                 "Packages/com.meta.xr.mrutilitykit/Core/Materials/MRUKLit.mat");
+            // 默认 Labels=0 会导致 EffectMesh 一个网格都不生成。
+            effectMesh.Labels = (MRUKAnchor.SceneLabels)(~0);
             effectMesh.Colliders = true;
             effectMesh.HideMesh = false;
             effectMesh.SpawnOnStart = MRUK.RoomFilter.CurrentRoomOnly;

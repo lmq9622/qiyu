@@ -127,7 +127,12 @@ namespace Qiyu.Quest.Perception
             _environmentDepth = FindFirstObjectByType<EnvironmentDepthManager>();
             if (sceneSummary != null && sceneSummary.CurrentRoom != null)
             {
-                RebuildAnchors(sceneSummary.CurrentRoom);
+                var room = sceneSummary.CurrentRoom;
+                RebuildAnchors(room);
+                if (effectMesh != null && effectMesh.EffectMeshObjects.Count == 0)
+                {
+                    effectMesh.CreateMesh(room);
+                }
             }
             ApplyVisibility();
         }
@@ -163,6 +168,11 @@ namespace Qiyu.Quest.Perception
         private void HandleRoomChanged(string summary, MRUKRoom room)
         {
             RebuildAnchors(room);
+            if (effectMesh != null && effectMesh.EffectMeshObjects.Count == 0 &&
+                room != null)
+            {
+                effectMesh.CreateMesh(room);
+            }
             ApplyVisibility();
         }
 
@@ -192,7 +202,7 @@ namespace Qiyu.Quest.Perception
             Debug.Log($"[QiyuReconstruction] roomMesh={showRoomMesh} " +
                       $"effectMeshes={effectMesh?.EffectMeshObjects.Count ?? 0} " +
                       $"anchors={showAnchors}({AnchorCount}) depthCloud={showDepthCloud} " +
-                      $"depth={DepthStatus}");
+                      $"depth={DepthStatus} points={_pointCount}");
         }
 
         private void RebuildAnchors(MRUKRoom room)
@@ -357,7 +367,8 @@ namespace Qiyu.Quest.Perception
                     var cameraPosition = _cameraTransform != null
                         ? _cameraTransform.position
                         : frame.CameraPose.position;
-                    var rotation = Quaternion.LookRotation(world - cameraPosition);
+                    // 让 quad 正面朝向相机，否则会被背面剔除掉。
+                    var rotation = Quaternion.LookRotation(cameraPosition - world);
                     _pointMatrices[count++] = Matrix4x4.TRS(world, rotation,
                         Vector3.one * depthPointSize);
                 }
@@ -467,7 +478,15 @@ namespace Qiyu.Quest.Perception
             {
                 material.SetFloat("_ZWrite", 0f);
             }
-            material.renderQueue = 3000;
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.SetInt("_SrcBlend",
+                (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            material.SetInt("_DstBlend",
+                (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            material.SetInt("_ZWrite", 0);
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
             return material;
         }
 
