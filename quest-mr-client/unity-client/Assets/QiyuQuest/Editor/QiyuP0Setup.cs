@@ -442,6 +442,7 @@ namespace Qiyu.Quest.Editor
                 Debug.LogWarning($"[QiyuP0Setup] Environment Depth 组件不可用: {e.Message}");
             }
             var projector = runtimeRoot.AddComponent<ObjectDetectionProjector>();
+            var reconstruction = runtimeRoot.AddComponent<QiyuSpatialReconstruction>();
             runtimeRoot.AddComponent<QuestPermissionsBootstrap>();
             runtimeRoot.AddComponent<QuestAvatarModelImporter>();
             var debugPanel = runtimeRoot.AddComponent<QiyuMRApp>();
@@ -474,6 +475,8 @@ namespace Qiyu.Quest.Editor
             Wire(projector, ("webSocketClient", client), ("cameraAccess", cameraAccess),
                 ("depthAccess", depthAccess), ("sceneSummary", summary),
                 ("worldStatePublisher", publisher));
+            Wire(reconstruction, ("sceneSummary", summary), ("effectMesh", effectMesh),
+                ("depthAccess", depthAccess), ("cameraAccess", cameraAccess));
             Wire(debugPanel,
                 ("webSocketClient", client),
                 ("microphone", microphone),
@@ -484,6 +487,7 @@ namespace Qiyu.Quest.Editor
                 ("objectDetector", projector),
                 ("avatarRouter", avatarRouter),
                 ("worldStatePublisher", publisher),
+                ("spatialReconstruction", reconstruction),
                 ("followTarget", centerEye));
 
             var lightObject = new GameObject("Directional Light");

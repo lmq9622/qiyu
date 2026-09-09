@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace Qiyu.Quest.UI
 {
@@ -9,9 +10,29 @@ namespace Qiyu.Quest.UI
     /// </summary>
     public class QiyuInteractionBootstrap : MonoBehaviour
     {
+        private OVRHand[] _hands;
+
         private void Start()
         {
+            _hands = FindObjectsByType<OVRHand>(FindObjectsInactive.Include);
             ApplyRayMaterials();
+        }
+
+        private void Update()
+        {
+            // 裸手改由 QiyuPointerVisuals 直接读 OVRHand 的 pinch strength 处理，
+            // 避免官方 OVRInputModule 在 tracked=False / conf=Low 时吞掉点击。
+            if (_hands == null)
+            {
+                return;
+            }
+            foreach (var hand in _hands)
+            {
+                if (hand != null)
+                {
+                    OVRInputModule.UntrackInputSource(hand);
+                }
+            }
         }
 
         public void ApplyRayMaterials()

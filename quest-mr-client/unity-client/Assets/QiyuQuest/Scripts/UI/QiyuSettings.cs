@@ -103,6 +103,13 @@ namespace Qiyu.Quest.UI
             set => Set(Prefix + "panel_distance", Mathf.Clamp(value, 1.2f, 3f));
         }
 
+        /// <summary>3DoF 跟随的平滑时间；越大越拖尾，越小越跟手。</summary>
+        public static float FollowSmoothTime
+        {
+            get => PlayerPrefs.GetFloat(Prefix + "follow_smooth", 0.2f);
+            set => Set(Prefix + "follow_smooth", Mathf.Clamp(value, 0.05f, 0.5f));
+        }
+
         public static int PanelMode
         {
             get => PlayerPrefs.GetInt(Prefix + "panel_mode", (int)QiyuPanelMode.Fixed6DoF);
@@ -132,6 +139,7 @@ namespace Qiyu.Quest.UI
             PlayerPrefs.DeleteKey(Prefix + "render_scale");
             PlayerPrefs.DeleteKey(Prefix + "low_foveation");
             PlayerPrefs.DeleteKey(Prefix + "panel_distance");
+            PlayerPrefs.DeleteKey(Prefix + "follow_smooth");
             PlayerPrefs.DeleteKey(Prefix + "panel_mode");
             PlayerPrefs.DeleteKey(Prefix + "auto_connect");
             PlayerPrefs.Save();

@@ -35,6 +35,7 @@ namespace Qiyu.Quest.UI
         [SerializeField] private ObjectDetectionProjector objectDetector;
         [SerializeField] private AvatarIntentRouter avatarRouter;
         [SerializeField] private MrukWorldStatePublisher worldStatePublisher;
+        [SerializeField] private QiyuSpatialReconstruction spatialReconstruction;
         [SerializeField] private Transform followTarget;
 
         [Header("面板")]
@@ -65,6 +66,8 @@ namespace Qiyu.Quest.UI
         private Vector3 _dragStartCanvasPosition;
         private Vector3 _dragStartHitPoint;
         private Vector3 _dragPlaneNormal;
+        private Vector3 _panelFollowVelocity;
+        private bool _panelPoseInitialized;
 
         private TMP_Text _connText;
         private Image _connDot;
@@ -75,6 +78,7 @@ namespace Qiyu.Quest.UI
         private TMP_Text _perceptionText;
         private TMP_Text _navText;
         private TMP_Text _objectText;
+        private TMP_Text _reconstructionText;
         private TMP_Text _brainText;
         private TMP_Text _debugText;
         private TMP_Text _chatHistory;
@@ -223,7 +227,21 @@ namespace Qiyu.Quest.UI
             if (QiyuSettings.PanelMode == (int)QiyuPanelMode.Motion3DoF &&
                 followTarget != null)
             {
-                PlaceInFrontOfUser();
+                GetPanelTargetPose(out var targetPosition, out var targetRotation);
+                if (!_panelPoseInitialized)
+                {
+                    _canvasRect.SetPositionAndRotation(targetPosition, targetRotation);
+                    _panelFollowVelocity = Vector3.zero;
+                    _panelPoseInitialized = true;
+                    return;
+                }
+                var smoothTime = Mathf.Clamp(QiyuSettings.FollowSmoothTime, 0.05f, 0.5f);
+                _canvasRect.position = Vector3.SmoothDamp(_canvasRect.position, targetPosition,
+                    ref _panelFollowVelocity, smoothTime, 4f, Time.unscaledDeltaTime);
+                var rotationT = 1f - Mathf.Exp(-Time.unscaledDeltaTime /
+                                               Mathf.Max(0.01f, smoothTime));
+                _canvasRect.rotation = Quaternion.Slerp(_canvasRect.rotation, targetRotation,
+                    rotationT);
             }
         }
 
@@ -233,10 +251,13 @@ namespace Qiyu.Quest.UI
             {
                 return;
             }
-            PlaceInFrontOfUser();
+            GetPanelTargetPose(out var targetPosition, out var targetRotation);
+            _canvasRect.SetPositionAndRotation(targetPosition, targetRotation);
+            _panelFollowVelocity = Vector3.zero;
+            _panelPoseInitialized = true;
         }
 
-        private void PlaceInFrontOfUser()
+        private void GetPanelTargetPose(out Vector3 position, out Quaternion rotation)
         {
             var forward = followTarget.forward;
             forward.y = 0f;
@@ -246,10 +267,10 @@ namespace Qiyu.Quest.UI
             }
             forward.Normalize();
             var distanceValue = Mathf.Clamp(QiyuSettings.PanelDistance, 1.2f, 3.0f);
-            _canvasRect.position = followTarget.position + forward * distanceValue +
-                                   Vector3.up * -0.06f;
+            position = followTarget.position + forward * distanceValue +
+                       Vector3.up * -0.06f;
             // Canvas 正面朝 -Z；+Z 指向用户前方，用户看到的是正面。
-            _canvasRect.rotation = Quaternion.LookRotation(forward, Vector3.up);
+            rotation = Quaternion.LookRotation(forward, Vector3.up);
         }
 
         private void ScrollWithThumbstick()
@@ -634,6 +655,7 @@ namespace Qiyu.Quest.UI
             _perceptionText = null;
             _navText = null;
             _objectText = null;
+            _reconstructionText = null;
             _brainText = null;
             _debugText = null;
             _chatHistory = null;
@@ -843,6 +865,37 @@ namespace Qiyu.Quest.UI
                 navMeshBuilder?.Build();
             }, QiyuButtonVariant.Primary, 19, 58);
 
+            var recon = QiyuUI.Card(_content, "Reconstruction", true,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(recon.transform, "空间重建",
+                "MRUK 房间几何 + 语义锚点 + 环境深度点云", "实时", QiyuUI.Success);
+            QiyuUI.Toggle(recon.transform, "RoomMesh", "显示房间网格（EffectMesh）",
+                spatialReconstruction != null && spatialReconstruction.ShowRoomMesh, value =>
+                {
+                    if (spatialReconstruction != null)
+                    {
+                        spatialReconstruction.ShowRoomMesh = value;
+                    }
+                });
+            QiyuUI.Toggle(recon.transform, "AnchorBoxes", "显示语义锚点（墙/地面/桌子/床…）",
+                spatialReconstruction != null && spatialReconstruction.ShowAnchors, value =>
+                {
+                    if (spatialReconstruction != null)
+                    {
+                        spatialReconstruction.ShowAnchors = value;
+                    }
+                });
+            QiyuUI.Toggle(recon.transform, "DepthCloud", "显示深度点云（几何景深）",
+                spatialReconstruction != null && spatialReconstruction.ShowDepthCloud, value =>
+                {
+                    if (spatialReconstruction != null)
+                    {
+                        spatialReconstruction.ShowDepthCloud = value;
+                    }
+                });
+            _reconstructionText = BodyLabel(recon.transform, "Info", 18,
+                QiyuUI.TextSecondary, 120);
+
             var objectCard = QiyuUI.Card(_content, "Objects", false, QiyuUI.RadiusCard, 32, 18);
             QiyuUI.CardHeader(objectCard.transform, "物体识别",
                 "Passthrough Camera → 视觉模型 → 3D 空间投影", "按需", QiyuUI.AccentWarm);
@@ -937,6 +990,25 @@ namespace Qiyu.Quest.UI
                                            $"{item.worldPosition.z:F1})");
                     }
                     _objectText.text = builder.ToString();
+                }
+            }
+            if (_reconstructionText != null)
+            {
+                if (spatialReconstruction == null)
+                {
+                    _reconstructionText.text = "空间重建组件未挂接";
+                }
+                else
+                {
+                    _reconstructionText.text =
+                        $"房间网格 {(spatialReconstruction.ShowRoomMesh ? "开" : "关")}   ·   " +
+                        $"语义锚点 {(spatialReconstruction.ShowAnchors ? "开" : "关")} " +
+                        $"({spatialReconstruction.AnchorCount} 个)\n" +
+                        $"深度 {(spatialReconstruction.DepthAvailable ? "已接收" : "等待中")}   ·   " +
+                        $"帧 {spatialReconstruction.DepthFrameCount}   ·   " +
+                        $"点云 {spatialReconstruction.PointCount} 点\n" +
+                        $"语义物体 {spatialReconstruction.SemanticObjectCount} 个" +
+                        "（桌子 / 床 / 储物 / 门窗框等）";
                 }
             }
         }
@@ -1125,6 +1197,9 @@ namespace Qiyu.Quest.UI
                     QiyuSettings.PanelDistance = value;
                     Recenter();
                 }, "m");
+            QiyuUI.Slider(render.transform, "FollowSmooth", "3DoF 跟随平滑（越大越拖尾）",
+                0.05f, 0.5f, QiyuSettings.FollowSmoothTime,
+                value => QiyuSettings.FollowSmoothTime = value, "s");
 
             var conversation = QiyuUI.Card(_content, "Conversation", false,
                 QiyuUI.RadiusCard, 32, 18);

@@ -496,7 +496,7 @@ namespace Qiyu.Quest.UI
         {
         }
 
-        private void SetFromPointer(PointerEventData eventData)
+        public void SetFromPointer(PointerEventData eventData)
         {
             Vector3 world;
             if (eventData is OVRPointerEventData vrData &&

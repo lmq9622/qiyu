@@ -35,6 +35,9 @@ namespace Qiyu.Quest.UI
         private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>();
         private Canvas _canvas;
         private OVRPointerEventData _eventData;
+        private PointerEventData _handEventData;
+        private GameObject _hoveredHandObject;
+        private bool _wasHandPinching;
         private Material _rayMaterial;
         private Material _activeMaterial;
         private Material _dotMaterial;
@@ -71,6 +74,10 @@ namespace Qiyu.Quest.UI
             if (_eventData == null)
             {
                 _eventData = new OVRPointerEventData(EventSystem.current);
+            }
+            if (_handEventData == null)
+            {
+                _handEventData = new PointerEventData(EventSystem.current);
             }
 
             foreach (var visual in _visuals)
@@ -141,6 +148,7 @@ namespace Qiyu.Quest.UI
             var direction = visual.Source.forward;
             var end = origin + direction * maxDistance;
             var hit = false;
+            RaycastResult hitResult = default;
 
             _eventData.Reset();
             _eventData.worldSpaceRay = new Ray(origin, direction);
@@ -156,6 +164,7 @@ namespace Qiyu.Quest.UI
                 }
                 end = result.worldPosition;
                 hit = true;
+                hitResult = result;
                 break;
             }
 
@@ -169,15 +178,63 @@ namespace Qiyu.Quest.UI
             {
                 visual.DotRenderer.sharedMaterial = hit ? _activeMaterial : _dotMaterial;
             }
+            if (visual.Hand != null)
+            {
+                UpdateHandInteraction(visual, hit ? hitResult : default, hit);
+            }
         }
 
         private static bool IsSourceActive(PointerVisual visual)
         {
             if (visual.Hand != null)
             {
-                return visual.Hand.IsTracked && visual.Hand.IsPointerPoseValid;
+                // tracked=False 但 pointer/data 有效时也要给用户反馈；
+                // 否则低置信度裸手会完全消失。
+                return visual.Hand.IsPointerPoseValid || visual.Hand.IsDataValid;
             }
             return visual.Controller != null && visual.Controller.IsActive();
+        }
+
+        private void UpdateHandInteraction(PointerVisual visual, RaycastResult hitResult,
+                                           bool hit)
+        {
+            var hovered = hit && hitResult.gameObject != null
+                ? hitResult.gameObject
+                : null;
+            if (_hoveredHandObject != hovered)
+            {
+                if (_hoveredHandObject != null)
+                {
+                    ExecuteEvents.ExecuteHierarchy(_hoveredHandObject, _handEventData,
+                        ExecuteEvents.pointerExitHandler);
+                }
+                _hoveredHandObject = hovered;
+                if (_hoveredHandObject != null)
+                {
+                    ExecuteEvents.ExecuteHierarchy(_hoveredHandObject, _handEventData,
+                        ExecuteEvents.pointerEnterHandler);
+                }
+            }
+
+            var pinchStrength = visual.Hand.GetFingerPinchStrength(
+                OVRHand.HandFinger.Index);
+            var pinching = pinchStrength > 0.65f ||
+                           visual.Hand.GetFingerIsPinching(OVRHand.HandFinger.Index);
+            if (hovered != null)
+            {
+                _handEventData.pointerCurrentRaycast = hitResult;
+                var slider = hovered.GetComponentInParent<QiyuUISlider>();
+                if (slider != null && pinching)
+                {
+                    slider.SetFromPointer(_handEventData);
+                }
+                else if (pinching && !_wasHandPinching)
+                {
+                    ExecuteEvents.ExecuteHierarchy(hovered, _handEventData,
+                        ExecuteEvents.pointerClickHandler);
+                }
+            }
+            _wasHandPinching = pinching;
         }
 
         private void CreateMaterials()
@@ -259,6 +316,11 @@ namespace Qiyu.Quest.UI
                     .Append(" pointer=").Append(hand.IsPointerPoseValid)
                     .Append(" data=").Append(hand.IsDataValid)
                     .Append(" conf=").Append(hand.HandConfidence)
+                    .Append(" pinch=").Append(hand.GetFingerPinchStrength(
+                        OVRHand.HandFinger.Index).ToString("F2"))
+                    .Append(" pinching=").Append(hand.GetFingerIsPinching(
+                        OVRHand.HandFinger.Index))
+                    .Append(" pos=").Append(hand.PointerPose.position.ToString("F2"))
                     .Append(" ray=").Append(hand.RayHelper != null)
                     .Append(']');
             }
