@@ -76,6 +76,29 @@ namespace Qiyu.Quest.Editor
             }
         }
 
+        [MenuItem("Qiyu/Log OpenXR Interaction Profiles")]
+        public static void LogOpenXRInteractionProfiles()
+        {
+            FeatureHelpers.RefreshFeatures(BuildTargetGroup.Android);
+            foreach (var featureId in new[]
+            {
+                "com.unity.openxr.feature.input.oculustouch",
+                "com.unity.openxr.feature.input.metaquestpro",
+                "com.unity.openxr.feature.input.metaquestplus",
+                "com.meta.openxr.feature.input.oculustouch.detached",
+                "com.meta.openxr.feature.input.metaquestpro.detached",
+                "com.meta.openxr.feature.input.metaquestplus.detached",
+                "com.unity.openxr.feature.input.handinteraction",
+            })
+            {
+                var feature = FeatureHelpers.GetFeatureWithIdForBuildTarget(
+                    BuildTargetGroup.Android, featureId);
+                Debug.Log($"[OpenXRProfile] {featureId} found={feature != null} " +
+                          $"enabled={(feature != null && feature.enabled)} " +
+                          $"type={feature?.GetType().Name}");
+            }
+        }
+
         private static void ConfigurePlayer()
         {
             PlayerSettings.companyName = "Qiyu";
@@ -171,6 +194,16 @@ namespace Qiyu.Quest.Editor
             {
                 "com.meta.openxr.feature.metaxr",
                 "com.meta.openxr.feature.foveation",
+                // 控制器 Interaction Profile：没有它们 OVRInput 会认为手柄未连接，
+                // OVRControllerHelper.IsActive() 永远是 false，UI 点击链路直接断。
+                "com.unity.openxr.feature.input.oculustouch",
+                "com.unity.openxr.feature.input.metaquestpro",
+                "com.unity.openxr.feature.input.metaquestplus",
+                "com.meta.openxr.feature.input.oculustouch.detached",
+                "com.meta.openxr.feature.input.metaquestpro.detached",
+                "com.meta.openxr.feature.input.metaquestplus.detached",
+                // 裸手：aim/pinch 交互 profile。
+                "com.unity.openxr.feature.input.handinteraction",
             })
             {
                 var feature = FeatureHelpers.GetFeatureWithIdForBuildTarget(

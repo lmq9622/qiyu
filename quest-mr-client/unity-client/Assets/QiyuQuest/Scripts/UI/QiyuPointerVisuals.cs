@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -236,6 +237,15 @@ namespace Qiyu.Quest.UI
             builder.Append("eventSystem=").Append(EventSystem.current != null);
             builder.Append(" module=").Append(OVRInputModule.instance != null);
             builder.Append(" handTracking=").Append(OVRPlugin.GetHandTrackingEnabled());
+            builder.Append(" connected=").Append(OVRInput.GetConnectedControllers());
+            builder.Append(" activeCtrl=").Append(OVRInput.GetActiveController());
+            if (OVRInputModule.instance != null)
+            {
+                var field = typeof(OVRInputModule).GetField("_trackedInputSources",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+                var list = field?.GetValue(OVRInputModule.instance) as System.Collections.IList;
+                builder.Append(" trackedSources=").Append(list?.Count ?? -1);
+            }
             builder.Append(" hands=");
             var hands = FindObjectsByType<OVRHand>(FindObjectsInactive.Include);
             foreach (var hand in hands)

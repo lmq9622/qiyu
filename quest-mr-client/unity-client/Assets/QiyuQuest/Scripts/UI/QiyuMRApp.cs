@@ -43,7 +43,7 @@ namespace Qiyu.Quest.UI
 
         private const float CanvasWidth = 1680f;
         private const float CanvasHeight = 1050f;
-        private const float Outer = 32f;
+        private const float Outer = 48f;
         private const float TopBarHeight = 88f;
         private const float TabBarHeight = 68f;
         private const float BottomBarHeight = 52f;

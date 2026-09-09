@@ -99,7 +99,7 @@ namespace Qiyu.Quest.UI
 
         public static float PanelDistance
         {
-            get => PlayerPrefs.GetFloat(Prefix + "panel_distance", 1.7f);
+            get => PlayerPrefs.GetFloat(Prefix + "panel_distance", 1.6f);
             set => Set(Prefix + "panel_distance", Mathf.Clamp(value, 1.2f, 3f));
         }
 
