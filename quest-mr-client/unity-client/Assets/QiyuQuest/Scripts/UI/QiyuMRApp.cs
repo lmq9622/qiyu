@@ -8,16 +8,19 @@ using Qiyu.Quest.Networking;
 using Qiyu.Quest.Perception;
 using Qiyu.Quest.Spatial;
 using Qiyu.Quest.Voice;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace Qiyu.Quest.UI
 {
     /// <summary>
-    /// Qiyu Quest MR 主界面：liquid glass 圆角卡片 + 标签页。
+    /// Qiyu Quest MR 主界面。
+    ///
+    /// 设计语言：visionOS 风格 liquid glass，大圆角、厚玻璃、柔和投影、果冻高光。
+    /// 交互：手柄射线 / 手部捏合 / 视线，A/扳机确认，左摇杆滚动，摇杆按下重新居中。
     ///
     /// 页面：首页 / 对话 / 环境 / 角色 / 设置 / 模型决策 / 调试
-    /// 交互：右手手柄射线（或头部视线）+ 扳机/A 键点击；左摇杆滚动。
     /// </summary>
     public class QiyuMRApp : MonoBehaviour
     {
@@ -34,30 +37,53 @@ namespace Qiyu.Quest.UI
         [SerializeField] private Transform followTarget;
 
         [Header("面板")]
-        [SerializeField] private float distance = 1.9f;
         [SerializeField] private float panelScale = 0.00105f;
         [SerializeField] private bool visible = true;
         [SerializeField] private bool followUser = false;
 
         private const float CanvasWidth = 1680f;
         private const float CanvasHeight = 1050f;
+        private const float Outer = 28f;
+        private const float TopBarHeight = 104f;
+        private const float TabBarHeight = 76f;
+        private const float BottomBarHeight = 56f;
+
+        private static readonly string[] Tabs =
+        {
+            "首页", "对话", "环境", "角色", "设置", "模型决策", "调试"
+        };
 
         private Canvas _canvas;
         private RectTransform _canvasRect;
         private RectTransform _content;
         private ScrollRect _scrollRect;
-        private Text _connPill;
-        private Text _sessionText;
-        private Text _bottomStatus;
-        private Text _homeMruk;
-        private Text _homeReply;
-        private Text _perceptionText;
-        private Text _brainText;
-        private Text _debugText;
-        private Text _chatHistory;
-        private Text _avatarStatus;
-        private readonly Dictionary<string, QiyuUIButton> _tabButtons =
-            new Dictionary<string, QiyuUIButton>();
+        private QiyuVirtualKeyboard _keyboard;
+        private QiyuRenderQuality _renderQuality;
+
+        private TMP_Text _connText;
+        private Image _connDot;
+        private TMP_Text _sessionText;
+        private TMP_Text _bottomStatus;
+        private TMP_Text _homeMruk;
+        private TMP_Text _homeReply;
+        private TMP_Text _homeSystem;
+        private TMP_Text _perceptionText;
+        private TMP_Text _navText;
+        private TMP_Text _objectText;
+        private TMP_Text _brainText;
+        private TMP_Text _debugText;
+        private TMP_Text _chatHistory;
+        private TMP_Text _avatarStatus;
+        private TMP_Text _avatarIntentText;
+        private TMP_Text _avatarPreviewText;
+        private QiyuUIInputField _chatInput;
+        private QiyuUIInputField _avatarUrlInput;
+        private Image _roomChip;
+        private Image _anchorChip;
+        private Image _objectChip;
+
+        private readonly Dictionary<string, QiyuUITab> _tabButtons =
+            new Dictionary<string, QiyuUITab>();
         private string _activeTab = "首页";
         private string _lastSpeech = "";
         private string _lastTranscript = "";
@@ -67,11 +93,7 @@ namespace Qiyu.Quest.UI
         private string _lastSpatialAction = "";
         private readonly List<string> _chatLines = new List<string>();
         private float _nextRefreshAt;
-
-        private static readonly string[] Tabs =
-        {
-            "首页", "对话", "环境", "角色", "设置", "模型决策", "调试"
-        };
+        private float _smoothedFps = 72f;
 
         private void Start()
         {
@@ -113,11 +135,7 @@ namespace Qiyu.Quest.UI
 
         private void ApplySettingsToServer()
         {
-            if (webSocketClient == null)
-            {
-                return;
-            }
-            webSocketClient.SendAsync(new QuestEnvelope("client.tts_config",
+            webSocketClient?.SendAsync(new QuestEnvelope("client.tts_config",
                 new JObject { ["enabled"] = QiyuSettings.TtsEnabled },
                 webSocketClient.SessionId));
         }
@@ -164,7 +182,7 @@ namespace Qiyu.Quest.UI
                 return;
             }
             _chatLines.Add($"{speaker}：{text}");
-            if (_chatLines.Count > 12)
+            if (_chatLines.Count > 40)
             {
                 _chatLines.RemoveAt(0);
             }
@@ -172,13 +190,18 @@ namespace Qiyu.Quest.UI
 
         private void Update()
         {
+            _smoothedFps = Mathf.Lerp(_smoothedFps, 1f / Mathf.Max(0.0001f,
+                Time.unscaledDeltaTime), 0.08f);
             UpdatePanelTransform();
             UpdateTopBar();
             UpdateActivePanel();
-            ScrollWithThumbstick();
-            if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick))
+            if (QiyuGazeInteractor.ModalRoot == null)
             {
-                Recenter();
+                ScrollWithThumbstick();
+                if (OVRInput.GetDown(OVRInput.Button.PrimaryThumbstick))
+                {
+                    Recenter();
+                }
             }
         }
 
@@ -194,7 +217,6 @@ namespace Qiyu.Quest.UI
             }
         }
 
-        /// <summary>把面板放到用户正前方一次（空间固定，不跟随头部）。</summary>
         public void Recenter()
         {
             if (_canvasRect == null || followTarget == null)
@@ -213,8 +235,9 @@ namespace Qiyu.Quest.UI
                 forward = Vector3.forward;
             }
             forward.Normalize();
-            _canvasRect.position = followTarget.position + forward * distance +
-                                   Vector3.up * -0.08f;
+            var distanceValue = Mathf.Clamp(QiyuSettings.PanelDistance, 1.2f, 3.0f);
+            _canvasRect.position = followTarget.position + forward * distanceValue +
+                                   Vector3.up * -0.06f;
             // Canvas 正面朝 -Z；+Z 指向用户前方，用户看到的是正面。
             _canvasRect.rotation = Quaternion.LookRotation(forward, Vector3.up);
         }
@@ -228,8 +251,8 @@ namespace Qiyu.Quest.UI
             var axis = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
             if (Mathf.Abs(axis.y) > 0.15f)
             {
-                _scrollRect.verticalNormalizedPosition =
-                    Mathf.Clamp01(_scrollRect.verticalNormalizedPosition + axis.y * 0.02f);
+                _scrollRect.verticalNormalizedPosition = Mathf.Clamp01(
+                    _scrollRect.verticalNormalizedPosition + axis.y * 0.025f);
             }
         }
 
@@ -237,12 +260,18 @@ namespace Qiyu.Quest.UI
         {
             var connected = webSocketClient != null && webSocketClient.IsConnected;
             var handshake = webSocketClient != null && webSocketClient.HandshakeDone;
-            if (_connPill != null)
+            if (_connText != null)
             {
-                _connPill.text = connected
-                    ? (handshake ? "● 已连接" : "● 握手中")
-                    : "● 未连接";
-                _connPill.color = connected
+                _connText.text = connected
+                    ? (handshake ? "已连接" : "握手中")
+                    : "未连接";
+                _connText.color = connected
+                    ? (handshake ? QiyuUI.Success : QiyuUI.Warning)
+                    : QiyuUI.Danger;
+            }
+            if (_connDot != null)
+            {
+                _connDot.color = connected
                     ? (handshake ? QiyuUI.Success : QiyuUI.Warning)
                     : QiyuUI.Danger;
             }
@@ -257,8 +286,8 @@ namespace Qiyu.Quest.UI
             {
                 var mic = microphone != null && microphone.IsCapturing ? "麦克风开" : "麦克风关";
                 var tts = ttsPlayer != null && ttsPlayer.IsPlaying ? "TTS 播放中" : "TTS 空闲";
-                _bottomStatus.text = $"{mic}   |   {tts}   |   " +
-                                     $"最近: {_lastEvent}";
+                _bottomStatus.text = $"{mic}   ·   {tts}   ·   {_smoothedFps:F0} FPS   ·   " +
+                                     $"最近事件：{(_lastEvent.Length > 0 ? _lastEvent : "无")}";
             }
         }
 
@@ -292,7 +321,7 @@ namespace Qiyu.Quest.UI
             }
         }
 
-        // ---------------- Shell ----------------
+        // ---------------- 主壳 ----------------
 
         private void BuildShell()
         {
@@ -301,79 +330,124 @@ namespace Qiyu.Quest.UI
             _canvas = canvasObject.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.WorldSpace;
             _canvas.sortingOrder = 200;
+            _canvas.pixelPerfect = false;
+            _canvas.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord1 |
+                                                AdditionalCanvasShaderChannels.Normal |
+                                                AdditionalCanvasShaderChannels.Tangent;
             _canvasRect = (RectTransform)canvasObject.transform;
             _canvasRect.sizeDelta = new Vector2(CanvasWidth, CanvasHeight);
             _canvasRect.localScale = Vector3.one * panelScale;
 
-            var background = QiyuUI.Card(canvasObject.transform, "Root", true, 34);
-            QiyuUI.Stretch(background.rectTransform);
+            var root = QiyuUI.Panel(canvasObject.transform, "Root", true,
+                QiyuUI.RadiusPanel, 1f);
+            QiyuUI.Stretch(root.rectTransform);
 
-            // 顶部栏
-            var top = QiyuUI.CreateRect(canvasObject.transform, "TopBar");
-            QiyuUI.SetAnchored(top, new Vector2(0, 1), new Vector2(1, 1),
-                new Vector2(26, -96), new Vector2(-26, -22));
-            var logo = QiyuUI.Label(top, "Logo", "栖", 40, QiyuUI.TextPrimary,
-                TextAnchor.MiddleCenter, FontStyle.Bold);
-            QiyuUI.SetAnchored(logo.rectTransform, new Vector2(0, 0), new Vector2(0, 1),
-                new Vector2(0, 0), new Vector2(56, 0));
-            var title = QiyuUI.Label(top, "Title", "栖语 Quest", 34, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold);
-            QiyuUI.SetAnchored(title.rectTransform, new Vector2(0, 0), new Vector2(0.5f, 1),
-                new Vector2(70, 12), new Vector2(0, -6));
-            var subtitle = QiyuUI.Label(top, "Subtitle", "MR Companion Runtime", 18,
-                QiyuUI.TextTertiary, TextAnchor.UpperLeft);
-            QiyuUI.SetAnchored(subtitle.rectTransform, new Vector2(0, 0), new Vector2(0.5f, 1),
-                new Vector2(72, 0), new Vector2(0, -46));
-            _connPill = QiyuUI.Label(top, "ConnPill", "● 未连接", 20, QiyuUI.Danger,
-                TextAnchor.MiddleRight, FontStyle.Bold);
-            QiyuUI.SetAnchored(_connPill.rectTransform, new Vector2(0.5f, 0), new Vector2(0.78f, 1),
-                Vector2.zero, Vector2.zero);
-            _sessionText = QiyuUI.Label(top, "Session", "session: -", 18,
-                QiyuUI.TextTertiary, TextAnchor.MiddleRight);
-            QiyuUI.SetAnchored(_sessionText.rectTransform, new Vector2(0.78f, 0), new Vector2(1, 1),
-                Vector2.zero, Vector2.zero);
+            BuildTopBar(canvasObject.transform);
+            BuildTabBar(canvasObject.transform);
+
+            var scrollRoot = QiyuUI.ScrollView(canvasObject.transform, "Content", out _content,
+                QiyuUI.Space6);
+            QiyuUI.SetAnchored((RectTransform)scrollRoot.transform,
+                new Vector2(0f, 0f), new Vector2(1f, 1f),
+                new Vector2(Outer, 96f), new Vector2(-Outer, -244f));
+            _scrollRect = scrollRoot.GetComponent<ScrollRect>();
+
+            BuildBottomBar(canvasObject.transform);
+
+            var keyboardObject = new GameObject("QiyuVirtualKeyboard",
+                typeof(RectTransform), typeof(QiyuVirtualKeyboard));
+            keyboardObject.transform.SetParent(canvasObject.transform, false);
+            _keyboard = keyboardObject.GetComponent<QiyuVirtualKeyboard>();
+            _keyboard.Build(_canvasRect);
+
+            canvasObject.AddComponent<QiyuGazeInteractor>();
+            _renderQuality = canvasObject.AddComponent<QiyuRenderQuality>();
+            _renderQuality.ApplyFromSettings();
+        }
+
+        private void BuildTopBar(Transform parent)
+        {
+            var top = QiyuUI.CreateRect(parent, "TopBar");
+            QiyuUI.SetAnchored(top, new Vector2(0f, 1f), new Vector2(1f, 1f),
+                new Vector2(Outer, -TopBarHeight - Outer),
+                new Vector2(-Outer, -Outer));
+
+            var logo = QiyuUI.Panel(top, "LogoMark", true, 20);
+            QiyuUI.SetAnchored(logo.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+                new Vector2(0f, -32f), new Vector2(64f, 32f));
+            var logoLabel = QiyuUI.Label(logo.rectTransform, "Glyph", "栖", 30,
+                QiyuUI.TextPrimary, TextAnchor.MiddleCenter, true);
+            QiyuUI.Stretch(logoLabel.rectTransform);
+
+            var title = QiyuUI.Label(top, "Title", "栖语", 30, QiyuUI.TextPrimary,
+                TextAnchor.UpperLeft, true);
+            QiyuUI.SetAnchored(title.rectTransform, new Vector2(0f, 0f), new Vector2(0.45f, 1f),
+                new Vector2(82f, 28f), new Vector2(0f, -6f));
+            var subtitle = QiyuUI.Label(top, "Subtitle", "Quest MR Companion", 15,
+                QiyuUI.TextTertiary, TextAnchor.LowerLeft);
+            QiyuUI.SetAnchored(subtitle.rectTransform, new Vector2(0f, 0f),
+                new Vector2(0.45f, 1f), new Vector2(84f, 8f), new Vector2(0f, -52f));
+
+            _sessionText = QiyuUI.Label(top, "Session", "session: -", 15,
+                QiyuUI.TextTertiary, TextAnchor.MiddleRight, false, false);
+            QiyuUI.SetAnchored(_sessionText.rectTransform, new Vector2(0.42f, 0f),
+                new Vector2(0.72f, 1f), Vector2.zero, Vector2.zero);
+
+            var chip = QiyuUI.Panel(top, "ConnChip", false, 16);
+            QiyuUI.SetAnchored(chip.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-392f, -20f), new Vector2(-180f, 20f));
+            var dot = QiyuUI.CreateRect(chip.rectTransform, "Dot");
+            QiyuUI.SetAnchored(dot, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+                new Vector2(16f, -7f), new Vector2(30f, 7f));
+            _connDot = dot.gameObject.AddComponent<Image>();
+            _connDot.sprite = QiyuUI.RadialSprite(64, Color.white,
+                new Color(1f, 1f, 1f, 0f));
+            _connDot.raycastTarget = false;
+            _connText = QiyuUI.Label(chip.rectTransform, "Text", "未连接", 18,
+                QiyuUI.Danger, TextAnchor.MiddleLeft, true);
+            QiyuUI.SetAnchored(_connText.rectTransform, new Vector2(0f, 0f),
+                new Vector2(1f, 1f), new Vector2(38f, 0f), new Vector2(-12f, 0f));
+
             var recenter = QiyuUI.Button(top, "Recenter", "重新居中", Recenter,
-                QiyuUI.ButtonVariant.Glass, 18, 44);
+                QiyuButtonVariant.Glass, 18, 48);
             QiyuUI.SetAnchored((RectTransform)recenter.transform,
-                new Vector2(0.30f, 0f), new Vector2(0.46f, 0f),
-                new Vector2(0f, 4f), new Vector2(0f, 48f));
+                new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-168f, -24f), new Vector2(0f, 24f));
+        }
 
-            // 标签栏
-            var tabBar = QiyuUI.CreateRect(canvasObject.transform, "TabBar");
-            QiyuUI.SetAnchored(tabBar, new Vector2(0, 1), new Vector2(1, 1),
-                new Vector2(26, -170), new Vector2(-26, -104));
-            var tabLayout = tabBar.gameObject.AddComponent<HorizontalLayoutGroup>();
-            tabLayout.spacing = 10f;
-            tabLayout.childControlWidth = true;
-            tabLayout.childControlHeight = true;
-            tabLayout.childForceExpandWidth = true;
-            tabLayout.childForceExpandHeight = true;
+        private void BuildTabBar(Transform parent)
+        {
+            var bar = QiyuUI.CreateRect(parent, "TabBar");
+            QiyuUI.SetAnchored(bar, new Vector2(0f, 1f), new Vector2(1f, 1f),
+                new Vector2(Outer, -TopBarHeight - Outer - 20f - TabBarHeight),
+                new Vector2(-Outer, -TopBarHeight - Outer - 20f));
+            var background = QiyuUI.Panel(bar, "BarBackground", false, 24);
+            QiyuUI.Stretch(background.rectTransform);
+            var row = QiyuUI.HBox(bar, "TabRow", 8f, 6);
+            QiyuUI.Stretch(row, 6f);
             foreach (var tab in Tabs)
             {
                 var captured = tab;
-                var button = QiyuUI.Button(tabBar, $"Tab_{tab}", tab,
-                    () => ShowTab(captured),
-                    QiyuUI.ButtonVariant.Ghost, 21, 52);
-                _tabButtons[tab] = button;
+                _tabButtons[tab] = QiyuUI.Tab(row, $"Tab_{tab}", tab,
+                    () => ShowTab(captured));
             }
+        }
 
-            // 内容区
-            var scrollRoot = QiyuUI.ScrollView(canvasObject.transform, "Content",
-                out _content);
-            QiyuUI.SetAnchored((RectTransform)scrollRoot.transform,
-                new Vector2(0, 0), new Vector2(1, 1),
-                new Vector2(26, 88), new Vector2(-26, -180));
-            _scrollRect = scrollRoot.GetComponent<ScrollRect>();
-
-            // 底部状态栏
-            var bottom = QiyuUI.Card(canvasObject.transform, "BottomBar", false, 20);
-            QiyuUI.SetAnchored(bottom.rectTransform, new Vector2(0, 0), new Vector2(1, 0),
-                new Vector2(26, 20), new Vector2(-26, 78));
-            _bottomStatus = QiyuUI.Label(bottom.rectTransform, "Status", "", 19,
-                QiyuUI.TextSecondary, TextAnchor.MiddleLeft);
-            QiyuUI.Stretch(_bottomStatus.rectTransform, 18f, 0f);
-
-            var interactor = canvasObject.AddComponent<QiyuGazeInteractor>();
+        private void BuildBottomBar(Transform parent)
+        {
+            var bottom = QiyuUI.Panel(parent, "BottomBar", false, 20);
+            QiyuUI.SetAnchored(bottom.rectTransform, new Vector2(0f, 0f),
+                new Vector2(1f, 0f), new Vector2(Outer, Outer),
+                new Vector2(-Outer, Outer + BottomBarHeight));
+            _bottomStatus = QiyuUI.Label(bottom.rectTransform, "Status", "", 16,
+                QiyuUI.TextSecondary, TextAnchor.MiddleLeft, false, false);
+            QiyuUI.SetAnchored(_bottomStatus.rectTransform, new Vector2(0f, 0f),
+                new Vector2(0.78f, 1f), new Vector2(22f, 0f), Vector2.zero);
+            var hint = QiyuUI.Label(bottom.rectTransform, "Hint",
+                "左摇杆滚动 · 摇杆按下重新居中 · 手柄扳机 / 手部捏合点击", 15,
+                QiyuUI.TextTertiary, TextAnchor.MiddleRight, false, false);
+            QiyuUI.SetAnchored(hint.rectTransform, new Vector2(0.72f, 0f),
+                new Vector2(1f, 1f), Vector2.zero, new Vector2(-22f, 0f));
         }
 
         private void ShowTab(string tab)
@@ -381,26 +455,17 @@ namespace Qiyu.Quest.UI
             _activeTab = tab;
             foreach (var kv in _tabButtons)
             {
-                var image = kv.Value.GetComponent<Image>();
-                var active = kv.Key == tab;
-                image.color = active ? new Color(1f, 1f, 1f, 0.92f) : Color.white;
-                var label = kv.Value.GetComponentInChildren<Text>();
-                if (label != null)
-                {
-                    label.color = active ? new Color(0.07f, 0.07f, 0.08f) : QiyuUI.TextSecondary;
-                }
+                kv.Value.SetActive(kv.Key == tab);
+            }
+            if (_keyboard != null)
+            {
+                _keyboard.Hide();
             }
             foreach (Transform child in _content)
             {
                 Destroy(child.gameObject);
             }
-            _homeMruk = null;
-            _homeReply = null;
-            _perceptionText = null;
-            _brainText = null;
-            _debugText = null;
-            _chatHistory = null;
-            _avatarStatus = null;
+            ResetPanelReferences();
             switch (tab)
             {
                 case "首页":
@@ -428,105 +493,170 @@ namespace Qiyu.Quest.UI
             _scrollRect.verticalNormalizedPosition = 1f;
         }
 
-        // ---------------- Panels ----------------
+        private void ResetPanelReferences()
+        {
+            _homeMruk = null;
+            _homeReply = null;
+            _homeSystem = null;
+            _perceptionText = null;
+            _navText = null;
+            _objectText = null;
+            _brainText = null;
+            _debugText = null;
+            _chatHistory = null;
+            _avatarStatus = null;
+            _avatarIntentText = null;
+            _avatarPreviewText = null;
+            _chatInput = null;
+            _avatarUrlInput = null;
+            _debugWorldText = null;
+            _roomChip = null;
+            _anchorChip = null;
+            _objectChip = null;
+        }
+
+        // ---------------- 首页 ----------------
 
         private void BuildHome()
         {
-            var quick = QiyuUI.Card(_content, "QuickActions", true);
-            var quickLayout = quick.gameObject.AddComponent<VerticalLayoutGroup>();
-            quickLayout.spacing = 12f;
-            quickLayout.padding = new RectOffset(18, 18, 18, 18);
-            quickLayout.childControlWidth = true;
-            quickLayout.childControlHeight = false;
-            quickLayout.childForceExpandWidth = true;
-            var quickFitter = quick.gameObject.AddComponent<ContentSizeFitter>();
-            quickFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(quick.transform, "Title", "快捷操作", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            var row1 = QiyuUI.HBox(quick.transform, "Row1");
-            row1.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row1, "Hello", "你好，你在吗？",
-                () => webSocketClient?.SendUserTextAsync("你好，你在吗？"),
-                QiyuUI.ButtonVariant.Primary, 21, 58);
-            QiyuUI.Button(row1, "Vision", "桌子上有什么？",
-                () => webSocketClient?.SendUserTextAsync("你能看到桌子上有什么吗？"),
-                QiyuUI.ButtonVariant.Glass, 21, 58);
-            var row2 = QiyuUI.HBox(quick.transform, "Row2");
-            row2.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row2, "Capture", "抓帧识别",
-                () => frameSource?.CaptureAndSend("桌子上有什么"),
-                QiyuUI.ButtonVariant.Glass, 21, 58);
-            QiyuUI.Button(row2, "Barge", "打断 TTS", () =>
-            {
-                ttsPlayer?.StopPlayback(true);
-                webSocketClient?.SendBargeInAsync("ui_button");
-            }, QiyuUI.ButtonVariant.Danger, 21, 58);
+            var hero = QiyuUI.Card(_content, "Hero", true, QiyuUI.RadiusCard, 32, 24);
+            QiyuUI.CardHeader(hero.transform, "欢迎回来",
+                "栖语正在你的真实房间里待命", "运行中", QiyuUI.Success);
 
-            var status = QiyuUI.Card(_content, "Status", true);
-            var statusLayout = status.gameObject.AddComponent<VerticalLayoutGroup>();
-            statusLayout.spacing = 10f;
-            statusLayout.padding = new RectOffset(18, 18, 18, 18);
-            statusLayout.childControlWidth = true;
-            statusLayout.childControlHeight = false;
-            statusLayout.childForceExpandWidth = true;
-            var fitter = status.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(status.transform, "Title", "运行状态", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            _homeMruk = QiyuUI.Label(status.transform, "Mruk", "", 21,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _homeMruk.gameObject.AddComponent<LayoutElement>().minHeight = 150;
-            _homeReply = QiyuUI.Label(status.transform, "Reply", "", 21,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _homeReply.gameObject.AddComponent<LayoutElement>().minHeight = 90;
+            var chips = QiyuUI.HBox(hero.transform, "Stats", 16f);
+            QiyuUI.Layout(chips.gameObject, 96f);
+            _roomChip = QiyuUI.StatChip(chips, "RoomChip", "房间", "-", QiyuUI.Accent);
+            _anchorChip = QiyuUI.StatChip(chips, "AnchorChip", "锚点", "-", QiyuUI.Success);
+            _objectChip = QiyuUI.StatChip(chips, "ObjectChip", "识别物体", "-", QiyuUI.AccentWarm);
+
+            var row1 = QiyuUI.HBox(hero.transform, "Actions1", 16f);
+            QiyuUI.Layout(row1.gameObject, 78f);
+            QiyuUI.Button(row1, "Hello", "打个招呼\n你好，你在吗？",
+                () => webSocketClient?.SendUserTextAsync("你好，你在吗？"),
+                QiyuButtonVariant.Primary, 19, 74);
+            QiyuUI.Button(row1, "Vision", "看看桌子\n桌上有什么？",
+                () => webSocketClient?.SendUserTextAsync("你能看到桌子上有什么吗？"),
+                QiyuButtonVariant.Glass, 19, 74);
+            var row2 = QiyuUI.HBox(hero.transform, "Actions2", 16f);
+            QiyuUI.Layout(row2.gameObject, 78f);
+            QiyuUI.Button(row2, "Capture", "抓帧识别\n杯子 / 手机 / 小物体",
+                () => frameSource?.CaptureAndSend("桌子上有什么"),
+                QiyuButtonVariant.Accent, 19, 74);
+            QiyuUI.Button(row2, "Barge", "打断说话\n立即停止 TTS",
+                () =>
+                {
+                    ttsPlayer?.StopPlayback(true);
+                    webSocketClient?.SendBargeInAsync("ui_button");
+                }, QiyuButtonVariant.Danger, 19, 74);
+
+            var reply = QiyuUI.Card(_content, "Reply", true, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(reply.transform, "最近回复", "语音与文字对话结果");
+            _homeReply = BodyLabel(reply.transform, "Text", 22, QiyuUI.TextPrimary, 110);
+
+            var status = QiyuUI.Card(_content, "System", false, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(status.transform, "系统状态", "MRUK / 连接 / 语音");
+            _homeMruk = BodyLabel(status.transform, "Mruk", 20, QiyuUI.TextSecondary, 96);
+            QiyuUI.Divider(status.transform);
+            _homeSystem = BodyLabel(status.transform, "SystemInfo", 19,
+                QiyuUI.TextSecondary, 110);
         }
 
         private void RefreshHome()
         {
+            var room = sceneSummary != null ? sceneSummary.CurrentRoom : null;
+            SetChipValue(_roomChip, room == null ? "-" : "已加载");
+            SetChipValue(_anchorChip, room == null ? "-" : room.Anchors.Count.ToString());
+            SetChipValue(_objectChip,
+                objectDetector != null && objectDetector.LastObjects != null
+                    ? objectDetector.LastObjects.Count.ToString()
+                    : "0");
+
             if (_homeMruk != null)
             {
-                var room = sceneSummary != null ? sceneSummary.CurrentRoom : null;
                 _homeMruk.text = room == null
-                    ? "MRUK：尚未加载房间"
-                    : $"MRUK：{room.name}\n锚点 {room.Anchors.Count} 个   " +
-                      $"墙 {room.WallAnchors.Count}   地面 {room.FloorAnchors.Count}   " +
-                      $"天花板 {room.CeilingAnchors.Count}";
+                    ? "MRUK：尚未加载房间。请环视四周完成空间扫描。"
+                    : $"MRUK：{room.name}\n墙 {room.WallAnchors.Count}   ·   " +
+                      $"地面 {room.FloorAnchors.Count}   ·   " +
+                      $"天花板 {room.CeilingAnchors.Count}   ·   " +
+                      $"锚点 {room.Anchors.Count}";
             }
             if (_homeReply != null)
             {
                 _homeReply.text = string.IsNullOrEmpty(_lastSpeech)
-                    ? "最近回复：-"
-                    : $"最近回复：{_lastSpeech}";
+                    ? "还没有回复。戴上头显直接说话，或点上面的快捷操作。"
+                    : _lastSpeech;
+            }
+            if (_homeSystem != null)
+            {
+                var connected = webSocketClient != null && webSocketClient.IsConnected;
+                var handshake = webSocketClient != null && webSocketClient.HandshakeDone;
+                var mic = microphone != null && microphone.IsCapturing;
+                var tts = ttsPlayer != null && ttsPlayer.IsPlaying;
+                _homeSystem.text =
+                    $"Gateway   {(connected ? (handshake ? "已连接" : "握手中") : "未连接")}\n" +
+                    $"麦克风    {(mic ? "采集中" : "关闭")}   ·   " +
+                    $"TTS {(tts ? "播放中" : "空闲")}\n" +
+                    $"渲染      {QiyuSettings.RenderScale:0.00}x   ·   " +
+                    $"{_smoothedFps:F0} FPS";
             }
         }
 
+        // ---------------- 对话 ----------------
+
         private void BuildChat()
         {
-            var card = QiyuUI.Card(_content, "Chat", true);
-            var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 12f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            var fitter = card.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(card.transform, "Title", "对话", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            _chatHistory = QiyuUI.Label(card.transform, "History", "", 21,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _chatHistory.gameObject.AddComponent<LayoutElement>().minHeight = 320;
-            var row = QiyuUI.HBox(card.transform, "Actions");
-            row.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row, "Mic", "语音输入（麦克风）", null, QiyuUI.ButtonVariant.Primary, 21, 58);
-            QiyuUI.Button(row, "Clear", "清空显示", () =>
+            var card = QiyuUI.Card(_content, "Chat", true, QiyuUI.RadiusCard, 32, 20);
+            QiyuUI.CardHeader(card.transform, "对话", "语音优先；文字输入用于调试与精确指令",
+                "实时", QiyuUI.Success);
+            _chatHistory = BodyLabel(card.transform, "History", 21, QiyuUI.TextPrimary, 420);
+            _chatHistory.textWrappingMode = TextWrappingModes.Normal;
+
+            var inputRow = QiyuUI.HBox(card.transform, "InputRow", 12f);
+            QiyuUI.Layout(inputRow.gameObject, 60f);
+            _chatInput = QiyuUI.Input(inputRow, "ChatInput", "输入文字，或直接说话…", "",
+                _ => { }, 58);
+            var send = QiyuUI.Button(inputRow, "Send", "发送", SendChatInput,
+                QiyuButtonVariant.Primary, 19, 58);
+            QiyuUI.Layout(send.gameObject, 58f, 58f, 0f);
+            var sendLayout = send.GetComponent<LayoutElement>();
+            sendLayout.preferredWidth = 150f;
+            sendLayout.minWidth = 150f;
+            sendLayout.flexibleWidth = 0f;
+
+            var actions = QiyuUI.HBox(card.transform, "Actions", 12f);
+            QiyuUI.Layout(actions.gameObject, 58f);
+            QiyuUI.Button(actions, "Mic", "麦克风常开 · VAD 自动断句", null,
+                QiyuButtonVariant.Ghost, 18, 58);
+            QiyuUI.Button(actions, "Clear", "清空对话显示", () =>
             {
                 _chatLines.Clear();
                 RefreshChat();
-            }, QiyuUI.ButtonVariant.Glass, 21, 58);
+            }, QiyuButtonVariant.Glass, 18, 58);
+
+            var tips = QiyuUI.Card(_content, "Tips", false, QiyuUI.RadiusCard, 28, 14);
+            QiyuUI.CardHeader(tips.transform, "对话技巧", null);
+            BodyLabel(tips.transform, "Text", 19, QiyuUI.TextSecondary, 96).text =
+                "• 直接说话即可，本地 VAD 会自动判断一句话的开始和结束。\n" +
+                "• TTS 播放时继续说话会触发 barge-in，栖语会立刻停下来听你说。\n" +
+                "• 复杂任务由后端自动升级到 MainBrain，Quest 端不会另起一套 Agent。";
+        }
+
+        private void SendChatInput()
+        {
+            if (_chatInput == null || webSocketClient == null)
+            {
+                return;
+            }
+            var text = _chatInput.Input.text;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+            AddChat("我", text);
+            _ = webSocketClient.SendUserTextAsync(text);
+            _chatInput.Input.text = "";
+            _chatInput.Input.caretPosition = 0;
+            RefreshChat();
         }
 
         private void RefreshChat()
@@ -545,275 +675,382 @@ namespace Qiyu.Quest.UI
             {
                 builder.AppendLine($"错误：{_lastError}");
             }
-            _chatHistory.text = builder.Length == 0 ? "还没有对话记录。戴上头显直接说话，或回首页点快捷操作。" : builder.ToString();
+            _chatHistory.text = builder.Length == 0
+                ? "还没有对话记录。\n戴上头显直接说话，或在输入框里输入一句话。"
+                : builder.ToString();
         }
+
+        // ---------------- 环境 ----------------
 
         private void BuildPerception()
         {
-            var card = QiyuUI.Card(_content, "Perception", true);
-            var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 12f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            var fitter = card.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(card.transform, "Title", "环境感知", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            _perceptionText = QiyuUI.Label(card.transform, "Info", "", 21,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _perceptionText.gameObject.AddComponent<LayoutElement>().minHeight = 360;
-            var row = QiyuUI.HBox(card.transform, "Actions");
-            row.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row, "Rescan", "重新扫描房间", () =>
+            var roomCard = QiyuUI.Card(_content, "Room", true, QiyuUI.RadiusCard, 32, 20);
+            QiyuUI.CardHeader(roomCard.transform, "房间理解",
+                "MRUK / Scene API 语义（不需要 YOLO 也能理解墙、地面、桌椅）",
+                "Scene", QiyuUI.Accent);
+            var stats = QiyuUI.HBox(roomCard.transform, "Stats", 12f);
+            QiyuUI.Layout(stats.gameObject, 96f);
+            _roomChip = QiyuUI.StatChip(stats, "Walls", "墙", "-", QiyuUI.Accent);
+            _anchorChip = QiyuUI.StatChip(stats, "Floors", "地面", "-", QiyuUI.Success);
+            _objectChip = QiyuUI.StatChip(stats, "Anchors", "锚点", "-", QiyuUI.AccentWarm);
+            _perceptionText = BodyLabel(roomCard.transform, "Info", 20,
+                QiyuUI.TextSecondary, 190);
+
+            var navCard = QiyuUI.Card(_content, "Nav", false, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(navCard.transform, "导航网格", "运行时 NavMesh，用于自然走动与避障");
+            _navText = BodyLabel(navCard.transform, "Info", 20, QiyuUI.TextSecondary, 96);
+            var navRow = QiyuUI.HBox(navCard.transform, "Actions", 12f);
+            QiyuUI.Layout(navRow.gameObject, 58f);
+            QiyuUI.Button(navRow, "Rescan", "重新扫描房间", () =>
             {
                 _ = MRUK.Instance?.LoadSceneFromDevice();
-            }, QiyuUI.ButtonVariant.Glass, 20, 58);
-            QiyuUI.Button(row, "Detect", "抓帧物体识别",
+            }, QiyuButtonVariant.Glass, 19, 58);
+            QiyuUI.Button(navRow, "Rebuild", "重建 NavMesh", () =>
+            {
+                navMeshBuilder?.Build();
+            }, QiyuButtonVariant.Primary, 19, 58);
+
+            var objectCard = QiyuUI.Card(_content, "Objects", false, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(objectCard.transform, "物体识别",
+                "Passthrough Camera → 视觉模型 → 3D 空间投影", "按需", QiyuUI.AccentWarm);
+            _objectText = BodyLabel(objectCard.transform, "Info", 20,
+                QiyuUI.TextSecondary, 150);
+            var objectRow = QiyuUI.HBox(objectCard.transform, "Actions", 12f);
+            QiyuUI.Layout(objectRow.gameObject, 58f);
+            QiyuUI.Button(objectRow, "Detect", "抓帧识别小物体",
                 () => frameSource?.CaptureAndSend("识别房间里的杯子、手机等小物体"),
-                QiyuUI.ButtonVariant.Primary, 20, 58);
+                QiyuButtonVariant.Accent, 19, 58);
+            QiyuUI.Button(objectRow, "Depth", "深度状态",
+                () => ShowTab("调试"), QiyuButtonVariant.Glass, 19, 58);
         }
 
         private void RefreshPerception()
         {
-            if (_perceptionText == null)
-            {
-                return;
-            }
-            var builder = new StringBuilder();
             var room = sceneSummary != null ? sceneSummary.CurrentRoom : null;
-            if (room == null)
+            if (_perceptionText != null)
             {
-                builder.AppendLine("MRUK：尚未加载房间");
-            }
-            else
-            {
-                builder.AppendLine($"房间：{room.name}");
-                builder.AppendLine($"锚点总数：{room.Anchors.Count}   " +
-                                   $"墙 {room.WallAnchors.Count}   " +
-                                   $"地面 {room.FloorAnchors.Count}   " +
-                                   $"天花板 {room.CeilingAnchors.Count}");
-                var counts = new Dictionary<string, int>();
-                foreach (var anchor in room.Anchors)
+                if (room == null)
                 {
-                    var label = anchor.Label.ToString();
-                    counts[label] = counts.TryGetValue(label, out var c) ? c + 1 : 1;
+                    _perceptionText.text = "尚未加载房间。\n环视四周并等待空间扫描完成后，MRUK 会给出语义锚点。";
                 }
-                foreach (var kv in counts)
+                else
                 {
-                    if (kv.Key.Contains("WALL") || kv.Key.Contains("FLOOR") ||
-                        kv.Key.Contains("CEILING"))
+                    var builder = new StringBuilder();
+                    builder.AppendLine($"房间：{room.name}");
+                    builder.AppendLine($"锚点总数 {room.Anchors.Count}   ·   " +
+                                       $"墙 {room.WallAnchors.Count}   ·   " +
+                                       $"地面 {room.FloorAnchors.Count}   ·   " +
+                                       $"天花板 {room.CeilingAnchors.Count}");
+                    var counts = new Dictionary<string, int>();
+                    foreach (var anchor in room.Anchors)
                     {
-                        continue;
+                        var label = anchor.Label.ToString();
+                        counts[label] = counts.TryGetValue(label, out var c) ? c + 1 : 1;
                     }
-                    builder.AppendLine($"  {kv.Key}: {kv.Value}");
+                    builder.Append("语义物体：");
+                    var any = false;
+                    foreach (var kv in counts)
+                    {
+                        if (kv.Key.Contains("WALL") || kv.Key.Contains("FLOOR") ||
+                            kv.Key.Contains("CEILING"))
+                        {
+                            continue;
+                        }
+                        builder.Append($"{kv.Key} {kv.Value}   ");
+                        any = true;
+                    }
+                    if (!any)
+                    {
+                        builder.Append("暂无桌椅等语义锚点");
+                    }
+                    _perceptionText.text = builder.ToString();
                 }
             }
-            builder.AppendLine();
-            builder.AppendLine("导航：");
-            if (navMeshBuilder != null && navMeshBuilder.Generated)
+            if (_roomChip != null)
             {
-                builder.AppendLine($"  已生成 v{navMeshBuilder.Version}  " +
-                                   $"可行走面积 {navMeshBuilder.WalkableAreaM2:F2} m²");
+                SetChipValue(_roomChip, room == null ? "-" : room.WallAnchors.Count.ToString());
             }
-            else
+            if (_anchorChip != null)
             {
-                builder.AppendLine("  未生成");
+                SetChipValue(_anchorChip, room == null ? "-" : room.FloorAnchors.Count.ToString());
             }
-            builder.AppendLine();
-            builder.AppendLine("识别物体：");
-            var objects = objectDetector != null ? objectDetector.LastObjects : null;
-            if (objects == null || objects.Count == 0)
+            if (_objectChip != null)
             {
-                builder.AppendLine("  暂无（点“抓帧物体识别”）");
+                SetChipValue(_objectChip, room == null ? "-" : room.Anchors.Count.ToString());
             }
-            else
+            if (_navText != null)
             {
-                foreach (var item in objects)
+                _navText.text = navMeshBuilder != null && navMeshBuilder.Generated
+                    ? $"已生成 v{navMeshBuilder.Version}\n" +
+                      $"可行走面积 {navMeshBuilder.WalkableAreaM2:F2} m²\n" +
+                      "角色可沿 NavMesh 自然走动、绕开真实家具。"
+                    : "尚未生成。加载房间后会自动根据 MRUK 地面/家具生成。";
+            }
+            if (_objectText != null)
+            {
+                var objects = objectDetector != null ? objectDetector.LastObjects : null;
+                if (objects == null || objects.Count == 0)
                 {
-                    builder.AppendLine($"  {item.label}  {item.confidence:P0}  " +
-                                       $"({item.worldPosition.x:F1},{item.worldPosition.y:F1}," +
-                                       $"{item.worldPosition.z:F1})");
+                    _objectText.text = "暂无识别结果。\n点“抓帧识别小物体”把当前画面交给视觉模型。";
+                }
+                else
+                {
+                    var builder = new StringBuilder();
+                    foreach (var item in objects)
+                    {
+                        builder.AppendLine($"{item.label}   {item.confidence:P0}   " +
+                                           $"({item.worldPosition.x:F1}, " +
+                                           $"{item.worldPosition.y:F1}, " +
+                                           $"{item.worldPosition.z:F1})");
+                    }
+                    _objectText.text = builder.ToString();
                 }
             }
-            _perceptionText.text = builder.ToString();
         }
+
+        // ---------------- 角色 ----------------
 
         private void BuildAvatar()
         {
-            var card = QiyuUI.Card(_content, "Avatar", true);
-            var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 12f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            var fitter = card.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(card.transform, "Title", "角色 / 模型", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            _avatarStatus = QiyuUI.Label(card.transform, "Status", "", 21,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _avatarStatus.gameObject.AddComponent<LayoutElement>().minHeight = 120;
+            var preview = QiyuUI.Card(_content, "AvatarPreview", true,
+                QiyuUI.RadiusCard, 32, 20);
+            QiyuUI.CardHeader(preview.transform, "角色", "VRM / GLB / Live2D 与未来角色系统",
+                "Avatar", QiyuUI.Accent);
 
-            QiyuUI.Label(card.transform, "ImportTitle", "导入模型（VRM / GLB）", 21,
-                QiyuUI.TextPrimary, TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 32;
-            QiyuUI.Input(card.transform, "AvatarUrl",
-                "模型地址或本地路径（预留）", QiyuSettings.AvatarUrl,
+            var frame = QiyuUI.Panel(preview.transform, "PreviewFrame", false, 24, 0.7f);
+            QiyuUI.Layout(frame.gameObject, 300f);
+            var frameGlow = QiyuUI.CreateRect(frame.rectTransform, "Glow");
+            QiyuUI.Stretch(frameGlow, 40f);
+            var glowImage = frameGlow.gameObject.AddComponent<Image>();
+            glowImage.sprite = QiyuUI.RadialSprite(256,
+                new Color(0.39f, 0.82f, 1f, 0.16f), new Color(0.39f, 0.82f, 1f, 0f));
+            glowImage.raycastTarget = false;
+            frameGlow.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+            _avatarPreviewText = QiyuUI.Label(frame.rectTransform, "Placeholder",
+                "尚未导入模型\n导入后角色会站在真实房间里", 22, QiyuUI.TextTertiary,
+                TextAnchor.MiddleCenter);
+            QiyuUI.Stretch(_avatarPreviewText.rectTransform, 24f);
+            _avatarPreviewText.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
+            _avatarStatus = BodyLabel(preview.transform, "Status", 20,
+                QiyuUI.TextSecondary, 120);
+
+            var import = QiyuUI.Card(_content, "AvatarImport", false,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(import.transform, "模型导入",
+                "支持本地 StreamingAssets、URL 下载、后端下发");
+            _avatarUrlInput = QiyuUI.Input(import.transform, "AvatarUrl",
+                "VRM / GLB 地址或本地路径", QiyuSettings.AvatarUrl,
                 value => QiyuSettings.AvatarUrl = value);
-            var row = QiyuUI.HBox(card.transform, "ImportRow");
-            row.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row, "Import", "导入模型", () =>
+            var importRow = QiyuUI.HBox(import.transform, "ImportRow", 12f);
+            QiyuUI.Layout(importRow.gameObject, 58f);
+            QiyuUI.Button(importRow, "Import", "导入模型", () =>
             {
-                var importer = GetComponent<QuestAvatarModelImporter>();
-                importer?.ImportFromConfiguredSource();
-            }, QiyuUI.ButtonVariant.Primary, 21, 58);
-            QiyuUI.Button(row, "Remove", "移除模型", () =>
+                GetComponent<QuestAvatarModelImporter>()?.ImportFromConfiguredSource();
+            }, QiyuButtonVariant.Primary, 19, 58);
+            QiyuUI.Button(importRow, "Remove", "移除模型", () =>
             {
                 GetComponent<QuestAvatarModelImporter>()?.RemoveModel();
-            }, QiyuUI.ButtonVariant.Danger, 21, 58);
-
-            QiyuUI.Slider(card.transform, "Scale", "模型缩放", 0.3f, 2.5f,
+            }, QiyuButtonVariant.Danger, 19, 58);
+            QiyuUI.Slider(import.transform, "Scale", "模型缩放", 0.3f, 2.5f,
                 QiyuSettings.AvatarScale, value => QiyuSettings.AvatarScale = value, "x");
-            QiyuUI.Slider(card.transform, "Height", "高度偏移", -1f, 1f,
+            QiyuUI.Slider(import.transform, "Height", "高度偏移", -1f, 1f,
                 QiyuSettings.AvatarHeight, value => QiyuSettings.AvatarHeight = value, "m");
+            QiyuUI.Slider(import.transform, "Rotation", "朝向修正", -180f, 180f,
+                QiyuSettings.AvatarRotation, value => QiyuSettings.AvatarRotation = value, "°");
+
+            var intent = QiyuUI.Card(_content, "AvatarIntent", false,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(intent.transform, "表情与动作",
+                "由后端 AvatarIntent 驱动，LLM 不直接控制骨骼");
+            _avatarIntentText = BodyLabel(intent.transform, "Info", 20,
+                QiyuUI.TextSecondary, 110);
+            var intentRow = QiyuUI.HBox(intent.transform, "Actions", 12f);
+            QiyuUI.Layout(intentRow.gameObject, 58f);
+            QiyuUI.Button(intentRow, "Smile", "对我笑一下",
+                () => webSocketClient?.SendUserTextAsync("对我笑一下"),
+                QiyuButtonVariant.Glass, 18, 58);
+            QiyuUI.Button(intentRow, "Wave", "挥挥手",
+                () => webSocketClient?.SendUserTextAsync("向我挥挥手"),
+                QiyuButtonVariant.Glass, 18, 58);
+            QiyuUI.Button(intentRow, "Look", "看着我",
+                () => webSocketClient?.SendUserTextAsync("看着我"),
+                QiyuButtonVariant.Primary, 18, 58);
         }
 
         private void RefreshAvatar()
         {
-            if (_avatarStatus == null)
-            {
-                return;
-            }
             var importer = GetComponent<QuestAvatarModelImporter>();
             var loaded = importer != null && importer.IsModelLoaded;
-            var builder = new StringBuilder();
-            builder.AppendLine(loaded
-                ? $"已加载：{importer.CurrentModelName}"
-                : "未导入模型（当前只有空间能力，没有可见角色）");
-            builder.AppendLine($"表情：{avatarRouter?.CurrentEmotion ?? "-"}   " +
-                               $"动作：{avatarRouter?.CurrentAction ?? "-"}   " +
-                               $"说话：{(avatarRouter != null && avatarRouter.IsSpeaking ? "是" : "否")}");
-            builder.AppendLine($"AvatarIntent：{(_lastAvatarIntent.Length > 0 ? _lastAvatarIntent : "-")}");
-            builder.AppendLine($"SpatialAction：{(_lastSpatialAction.Length > 0 ? _lastSpatialAction : "-")}");
-            builder.AppendLine();
-            builder.AppendLine("支持格式：VRM 1.0 / VRM 0.x / GLB（通过 UniVRM / glTFast）");
-            builder.AppendLine("模型可来自：本地 StreamingAssets、URL 下载、或未来 Qiyu 后端下发。");
-            _avatarStatus.text = builder.ToString();
+            if (_avatarPreviewText != null)
+            {
+                _avatarPreviewText.text = loaded
+                    ? $"已加载\n{importer.CurrentModelName}"
+                    : "尚未导入模型\n导入后角色会站在真实房间里";
+                _avatarPreviewText.color = loaded ? QiyuUI.TextPrimary : QiyuUI.TextTertiary;
+            }
+            if (_avatarStatus != null)
+            {
+                var builder = new StringBuilder();
+                builder.AppendLine(loaded
+                    ? $"当前模型：{importer.CurrentModelName}"
+                    : "当前没有可见角色，只有空间与对话能力。");
+                builder.AppendLine($"表情 {avatarRouter?.CurrentEmotion ?? "-"}   ·   " +
+                                   $"动作 {avatarRouter?.CurrentAction ?? "-"}   ·   " +
+                                   $"说话 {(avatarRouter != null && avatarRouter.IsSpeaking ? "是" : "否")}");
+                builder.Append("支持格式：VRM 1.0 / VRM 0.x / GLB（UniVRM / glTFast）");
+                _avatarStatus.text = builder.ToString();
+            }
+            if (_avatarIntentText != null)
+            {
+                _avatarIntentText.text =
+                    $"最近 AvatarIntent：{(_lastAvatarIntent.Length > 0 ? _lastAvatarIntent : "-")}\n" +
+                    $"最近 SpatialAction：{(_lastSpatialAction.Length > 0 ? _lastSpatialAction : "-")}";
+            }
         }
+
+        // ---------------- 设置 ----------------
 
         private void BuildSettings()
         {
-            var card = QiyuUI.Card(_content, "Settings", true);
-            var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 10f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            var fitter = card.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(card.transform, "Title", "设置", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-
-            Section(card.transform, "连接");
-            QiyuUI.Input(card.transform, "Gateway", "Gateway WebSocket 地址",
+            var conn = QiyuUI.Card(_content, "Connection", true, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(conn.transform, "连接", "Qiyu Gateway WebSocket",
+                "v1", QiyuUI.Success);
+            QiyuUI.Input(conn.transform, "Gateway", "Gateway WebSocket 地址",
                 QiyuSettings.GatewayUrl, value => QiyuSettings.GatewayUrl = value);
-            QiyuUI.Input(card.transform, "UserId", "user_id", QiyuSettings.UserId,
+            var ids = QiyuUI.HBox(conn.transform, "Ids", 12f);
+            QiyuUI.Layout(ids.gameObject, 58f);
+            QiyuUI.Input(ids, "UserId", "user_id", QiyuSettings.UserId,
                 value => QiyuSettings.UserId = value);
-            QiyuUI.Input(card.transform, "CharId", "char_id", QiyuSettings.CharId,
+            QiyuUI.Input(ids, "CharId", "char_id", QiyuSettings.CharId,
                 value => QiyuSettings.CharId = value);
-            QiyuUI.Toggle(card.transform, "AutoConnect", "启动时自动连接",
+            QiyuUI.Toggle(conn.transform, "AutoConnect", "启动时自动连接",
                 QiyuSettings.AutoConnect, value => QiyuSettings.AutoConnect = value);
-            QiyuUI.Toggle(card.transform, "Follow", "面板跟随头部（关闭 = 固定在空间）",
+            QiyuUI.Toggle(conn.transform, "Follow", "面板跟随头部（关闭 = 固定在空间中）",
                 followUser, value => followUser = value);
-            var connRow = QiyuUI.HBox(card.transform, "ConnRow");
-            connRow.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(connRow, "Recenter2", "重新居中", Recenter,
-                QiyuUI.ButtonVariant.Glass, 20, 58);
+            var connRow = QiyuUI.HBox(conn.transform, "Actions", 12f);
+            QiyuUI.Layout(connRow.gameObject, 58f);
+            QiyuUI.Button(connRow, "Recenter", "重新居中", Recenter,
+                QiyuButtonVariant.Glass, 18, 58);
             QiyuUI.Button(connRow, "Apply", "应用并重连", () =>
             {
                 webSocketClient?.SetServerUrl(QiyuSettings.GatewayUrl);
-            }, QiyuUI.ButtonVariant.Primary, 20, 58);
+            }, QiyuButtonVariant.Primary, 18, 58);
             QiyuUI.Button(connRow, "Ping", "心跳测试", () =>
             {
                 webSocketClient?.SendAsync(new QuestEnvelope("client.echo",
                     new JObject { ["probe"] = "ui" }, webSocketClient.SessionId));
-            }, QiyuUI.ButtonVariant.Glass, 20, 58);
+            }, QiyuButtonVariant.Glass, 18, 58);
 
-            Section(card.transform, "语音");
-            QiyuUI.Toggle(card.transform, "Tts", "启用服务端 TTS",
+            var voice = QiyuUI.Card(_content, "Voice", false, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(voice.transform, "语音", "麦克风 / VAD / TTS");
+            QiyuUI.Toggle(voice.transform, "Tts", "启用服务端 TTS",
                 QiyuSettings.TtsEnabled, value =>
                 {
                     QiyuSettings.TtsEnabled = value;
                     webSocketClient?.SendAsync(new QuestEnvelope("client.tts_config",
                         new JObject { ["enabled"] = value }, webSocketClient.SessionId));
                 });
-            QiyuUI.Slider(card.transform, "Vad", "麦克风灵敏度（VAD 阈值）",
+            QiyuUI.Slider(voice.transform, "Vad", "麦克风灵敏度（VAD 阈值）",
                 0.005f, 0.2f, QiyuSettings.VadThreshold, value =>
                 {
                     QiyuSettings.VadThreshold = value;
-                    if (microphone != null)
-                    {
-                        microphone.SetVadThreshold(value);
-                    }
+                    microphone?.SetVadThreshold(value);
                 });
-            QiyuUI.Slider(card.transform, "MicGain", "麦克风增益", 0.2f, 4f,
+            QiyuUI.Slider(voice.transform, "Gain", "麦克风增益", 0.2f, 4f,
                 QiyuSettings.MicGain, value =>
                 {
                     QiyuSettings.MicGain = value;
                     microphone?.SetGain(value);
                 });
 
-            Section(card.transform, "对话");
-            QiyuUI.Slider(card.transform, "Temp", "回复温度", 0f, 1.5f,
-                QiyuSettings.Temperature, value => QiyuSettings.Temperature = value);
+            var render = QiyuUI.Card(_content, "Render", false, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(render.transform, "渲染与清晰度",
+                "抗锯齿 / 渲染倍率 / 注视点渲染");
+            QiyuUI.Slider(render.transform, "RenderScale", "渲染倍率（越高越清晰，越耗性能）",
+                1f, 1.4f, QiyuSettings.RenderScale, value =>
+                {
+                    QiyuSettings.RenderScale = value;
+                    _renderQuality?.ApplyFromSettings();
+                }, "x");
+            QiyuUI.Toggle(render.transform, "Foveation", "低强度注视点渲染（关闭最清晰）",
+                QiyuSettings.LowFoveation, value =>
+                {
+                    QiyuSettings.LowFoveation = value;
+                    _renderQuality?.ApplyFromSettings();
+                });
+            QiyuUI.Slider(render.transform, "PanelDistance", "面板距离", 1.2f, 3f,
+                QiyuSettings.PanelDistance, value =>
+                {
+                    QiyuSettings.PanelDistance = value;
+                    Recenter();
+                }, "m");
 
-            var resetRow = QiyuUI.HBox(card.transform, "ResetRow");
-            resetRow.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(resetRow, "Reset", "恢复默认设置", () =>
+            var conversation = QiyuUI.Card(_content, "Conversation", false,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(conversation.transform, "对话", "回复风格与声音");
+            QiyuUI.Slider(conversation.transform, "Temp", "回复温度", 0f, 1.5f,
+                QiyuSettings.Temperature, value => QiyuSettings.Temperature = value);
+            QiyuUI.Input(conversation.transform, "VoiceId", "voice_id（留空 = 后端默认）",
+                QiyuSettings.Voice, value => QiyuSettings.Voice = value);
+
+            var advanced = QiyuUI.Card(_content, "Advanced", false,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(advanced.transform, "高级", "诊断与重置");
+            var advancedRow = QiyuUI.HBox(advanced.transform, "Actions", 12f);
+            QiyuUI.Layout(advancedRow.gameObject, 58f);
+            QiyuUI.Button(advancedRow, "Reset", "恢复默认设置", () =>
             {
                 QiyuSettings.ResetAll();
                 ShowTab("设置");
-            }, QiyuUI.ButtonVariant.Danger, 20, 58);
+            }, QiyuButtonVariant.Danger, 18, 58);
+            QiyuUI.Button(advancedRow, "Debug", "打开调试页", () => ShowTab("调试"),
+                QiyuButtonVariant.Glass, 18, 58);
         }
 
-        private static void Section(Transform parent, string title)
-        {
-            var label = QiyuUI.Label(parent, $"Section_{title}", title, 19,
-                QiyuUI.TextTertiary, TextAnchor.MiddleLeft, FontStyle.Bold);
-            label.gameObject.AddComponent<LayoutElement>().minHeight = 40;
-        }
+        // ---------------- 模型决策 ----------------
 
         private void BuildBrain()
         {
-            var card = QiyuUI.Card(_content, "Brain", true);
-            var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 12f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            var fitter = card.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(card.transform, "Title", "模型决策", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            _brainText = QiyuUI.Label(card.transform, "Info", "", 21,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _brainText.gameObject.AddComponent<LayoutElement>().minHeight = 360;
-            var row = QiyuUI.HBox(card.transform, "Actions");
-            row.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row, "MiniMind", "接入 MiniMind-O", null,
-                QiyuUI.ButtonVariant.Ghost, 20, 58);
-            QiyuUI.Button(row, "MainBrain", "测试 MainBrain", () =>
+            var pipeline = QiyuUI.Card(_content, "Pipeline", true, QiyuUI.RadiusCard, 32, 20);
+            QiyuUI.CardHeader(pipeline.transform, "模型决策链路",
+                "Quest 负责实时空间计算与执行，LLM 只输出高层意图",
+                "Qiyu 架构", QiyuUI.Accent);
+            var line1 = QiyuUI.HBox(pipeline.transform, "Line1", 8f);
+            QiyuUI.Layout(line1.gameObject, 44f);
+            FlowChip(line1, "Quest MR", QiyuUI.Accent);
+            FlowArrow(line1);
+            FlowChip(line1, "Gateway", QiyuUI.Success);
+            FlowArrow(line1);
+            FlowChip(line1, "MessageGateway", QiyuUI.Success);
+            FlowArrow(line1);
+            FlowChip(line1, "BrainPipeline", QiyuUI.Success);
+            var line2 = QiyuUI.HBox(pipeline.transform, "Line2", 8f);
+            QiyuUI.Layout(line2.gameObject, 44f);
+            FlowChip(line2, "MiniMind-O", QiyuUI.Accent);
+            FlowArrow(line2);
+            FlowChip(line2, "BrainDecision", QiyuUI.AccentWarm);
+            FlowArrow(line2);
+            FlowChip(line2, "MainBrain（按需）", QiyuUI.Warning);
+            FlowArrow(line2);
+            FlowChip(line2, "ResponseEvent", QiyuUI.Success);
+            FlowArrow(line2);
+            FlowChip(line2, "Quest 执行", QiyuUI.Accent);
+            BodyLabel(pipeline.transform, "Note", 19, QiyuUI.TextSecondary, 86).text =
+                "MiniMind-O 与 MainBrain 仍由现有 Qiyu 后端托管，Quest 只是新增 WebSocket 入口。\n" +
+                "AvatarIntent / SpatialAction 是唯一的下行接口，骨骼和路径永远由本地执行层决定。";
+
+            var status = QiyuUI.Card(_content, "BrainStatus", false,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(status.transform, "运行状态", "最近事件与意图");
+            _brainText = BodyLabel(status.transform, "Info", 20, QiyuUI.TextSecondary, 180);
+            var brainRow = QiyuUI.HBox(status.transform, "Actions", 12f);
+            QiyuUI.Layout(brainRow.gameObject, 58f);
+            QiyuUI.Button(brainRow, "Test", "测试完整主脑链路", () =>
                 webSocketClient?.SendUserTextAsync("测试一下完整主脑链路"),
-                QiyuUI.ButtonVariant.Glass, 20, 58);
+                QiyuButtonVariant.Primary, 18, 58);
+            QiyuUI.Button(brainRow, "MiniMind", "接入 MiniMind-O（主体完工后）", null,
+                QiyuButtonVariant.Ghost, 18, 58);
         }
 
         private void RefreshBrain()
@@ -822,79 +1059,124 @@ namespace Qiyu.Quest.UI
             {
                 return;
             }
-            var builder = new StringBuilder();
-            builder.AppendLine("链路：Quest → Gateway → MessageGateway → BrainPipeline");
-            builder.AppendLine("            → MiniMind-O → BrainDecision → MainBrain（需要时）");
-            builder.AppendLine();
-            builder.AppendLine($"最近事件：{_lastEvent}");
-            builder.AppendLine($"AvatarIntent：{(_lastAvatarIntent.Length > 0 ? _lastAvatarIntent : "-")}");
-            builder.AppendLine($"SpatialAction：{(_lastSpatialAction.Length > 0 ? _lastSpatialAction : "-")}");
-            builder.AppendLine();
-            builder.AppendLine("MiniMind-O：由 Qiyu 后端托管，本页预留接入状态显示。");
-            builder.AppendLine("MainBrain：复杂任务时由后端自动升级，Quest 端不另起 Agent。");
-            builder.AppendLine("说明：LLM 只输出 AvatarIntent / SpatialAction 高层意图，");
-            builder.AppendLine("      骨骼与路径由 Quest 本地执行层决定。");
-            _brainText.text = builder.ToString();
+            var connected = webSocketClient != null && webSocketClient.IsConnected;
+            var handshake = webSocketClient != null && webSocketClient.HandshakeDone;
+            _brainText.text =
+                $"Gateway：{(connected ? (handshake ? "已连接" : "握手中") : "未连接")}\n" +
+                $"最近事件：{(_lastEvent.Length > 0 ? _lastEvent : "-")}\n" +
+                $"AvatarIntent：{(_lastAvatarIntent.Length > 0 ? _lastAvatarIntent : "-")}\n" +
+                $"SpatialAction：{(_lastSpatialAction.Length > 0 ? _lastSpatialAction : "-")}";
         }
+
+        // ---------------- 调试 ----------------
 
         private void BuildDebug()
         {
-            var card = QiyuUI.Card(_content, "Debug", true);
-            var layout = card.gameObject.AddComponent<VerticalLayoutGroup>();
-            layout.spacing = 12f;
-            layout.padding = new RectOffset(18, 18, 18, 18);
-            layout.childControlWidth = true;
-            layout.childControlHeight = false;
-            layout.childForceExpandWidth = true;
-            var fitter = card.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            QiyuUI.Label(card.transform, "Title", "调试", 24, QiyuUI.TextPrimary,
-                TextAnchor.MiddleLeft, FontStyle.Bold).gameObject
-                .AddComponent<LayoutElement>().minHeight = 34;
-            _debugText = QiyuUI.Label(card.transform, "Info", "", 19,
-                QiyuUI.TextSecondary, TextAnchor.UpperLeft);
-            _debugText.gameObject.AddComponent<LayoutElement>().minHeight = 420;
-            var row = QiyuUI.HBox(card.transform, "Actions");
-            row.gameObject.AddComponent<LayoutElement>().minHeight = 60;
-            QiyuUI.Button(row, "Reconnect", "重连", () =>
-                webSocketClient?.ConnectAsync(), QiyuUI.ButtonVariant.Primary, 20, 58);
-            QiyuUI.Button(row, "World", "立即上报 WorldState", () =>
+            var diag = QiyuUI.Card(_content, "Diagnostics", true, QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(diag.transform, "运行诊断", "Passthrough / XR / 连接",
+                "Live", QiyuUI.Warning);
+            _debugText = BodyLabel(diag.transform, "Info", 18, QiyuUI.TextSecondary, 360);
+            _debugText.textWrappingMode = TextWrappingModes.Normal;
+
+            var world = QiyuUI.Card(_content, "WorldState", false,
+                QiyuUI.RadiusCard, 32, 18);
+            QiyuUI.CardHeader(world.transform, "WorldState", "最近一帧上报内容");
+            var worldText = BodyLabel(world.transform, "Json", 16, QiyuUI.TextTertiary, 260);
+            worldText.textWrappingMode = TextWrappingModes.Normal;
+            var worldRow = QiyuUI.HBox(world.transform, "Actions", 12f);
+            QiyuUI.Layout(worldRow.gameObject, 58f);
+            QiyuUI.Button(worldRow, "Send", "立即上报 WorldState", () =>
             {
                 if (worldStatePublisher != null && worldStatePublisher.LatestPayload != null)
                 {
                     webSocketClient?.SendWorldStateAsync(worldStatePublisher.LatestPayload);
                 }
-            }, QiyuUI.ButtonVariant.Glass, 20, 58);
+            }, QiyuButtonVariant.Primary, 18, 58);
+            QiyuUI.Button(worldRow, "Reconnect", "重连 Gateway", () =>
+                webSocketClient?.ConnectAsync(), QiyuButtonVariant.Glass, 18, 58);
+            _debugWorldText = worldText;
         }
+
+        private TMP_Text _debugWorldText;
 
         private void RefreshDebug()
         {
-            if (_debugText == null)
+            if (_debugText != null)
+            {
+                var builder = new StringBuilder();
+                builder.AppendLine("Passthrough");
+                builder.AppendLine(PassthroughDiagnostics.LastSnapshot);
+                builder.AppendLine();
+                builder.AppendLine("连接");
+                builder.AppendLine($"gateway：{webSocketClient?.ServerUrl}");
+                builder.AppendLine($"session：{webSocketClient?.SessionId}");
+                builder.AppendLine($"connected：{webSocketClient?.IsConnected}   " +
+                                   $"handshake：{webSocketClient?.HandshakeDone}");
+                builder.AppendLine();
+                builder.AppendLine("性能");
+                builder.AppendLine($"FPS {_smoothedFps:F0}   ·   " +
+                                   $"渲染倍率 {QiyuSettings.RenderScale:0.00}x   ·   " +
+                                   $"MSAA 4x");
+                _debugText.text = builder.ToString();
+            }
+            if (_debugWorldText != null)
+            {
+                var payload = worldStatePublisher != null
+                    ? worldStatePublisher.LatestPayload
+                    : null;
+                if (payload == null)
+                {
+                    _debugWorldText.text = "（尚未生成 WorldState）";
+                }
+                else
+                {
+                    var text = payload.ToString(Newtonsoft.Json.Formatting.None);
+                    _debugWorldText.text = text.Length > 1200
+                        ? text.Substring(0, 1200) + "…"
+                        : text;
+                }
+            }
+        }
+
+        // ---------------- 小工具 ----------------
+
+        private static TMP_Text BodyLabel(Transform parent, string name, int size,
+                                          Color color, float minHeight)
+        {
+            var label = QiyuUI.Label(parent, name, "", size, color, TextAnchor.UpperLeft);
+            QiyuUI.Layout(label.gameObject, minHeight);
+            return label;
+        }
+
+        private static void SetChipValue(Image chip, string value)
+        {
+            if (chip == null)
             {
                 return;
             }
-            var builder = new StringBuilder();
-            builder.AppendLine("Passthrough：");
-            builder.AppendLine($"  {PassthroughDiagnostics.LastSnapshot}");
-            builder.AppendLine();
-            builder.AppendLine("连接：");
-            builder.AppendLine($"  gateway: {webSocketClient?.ServerUrl}");
-            builder.AppendLine($"  session: {webSocketClient?.SessionId}");
-            builder.AppendLine($"  connected: {webSocketClient?.IsConnected}   " +
-                               $"handshake: {webSocketClient?.HandshakeDone}");
-            builder.AppendLine();
-            builder.AppendLine("WorldState（最近一帧）：");
-            var payload = worldStatePublisher != null ? worldStatePublisher.LatestPayload : null;
-            if (payload != null)
+            var label = chip.transform.Find("Value")?.GetComponent<TMP_Text>();
+            if (label != null)
             {
-                var text = payload.ToString(Newtonsoft.Json.Formatting.None);
-                builder.AppendLine(text.Length > 1400 ? text.Substring(0, 1400) + "…" : text);
+                label.text = value ?? "-";
             }
-            else
-            {
-                builder.AppendLine("  （尚未生成）");
-            }
-            _debugText.text = builder.ToString();
+        }
+
+        private static void FlowChip(Transform parent, string text, Color color)
+        {
+            var pill = QiyuUI.Pill(parent, "Chip_" + text, text, color, 15, 34f);
+            var layout = pill.GetComponent<LayoutElement>();
+            layout.flexibleWidth = 1f;
+        }
+
+        private static void FlowArrow(Transform parent)
+        {
+            var label = QiyuUI.Label(parent, "Arrow", "→", 20, QiyuUI.TextTertiary,
+                TextAnchor.MiddleCenter, true, false);
+            QiyuUI.Layout(label.gameObject, 34f, 34f, 0f);
+            var layout = label.GetComponent<LayoutElement>();
+            layout.preferredWidth = 34f;
+            layout.minWidth = 24f;
+            layout.flexibleWidth = 0f;
         }
     }
 }

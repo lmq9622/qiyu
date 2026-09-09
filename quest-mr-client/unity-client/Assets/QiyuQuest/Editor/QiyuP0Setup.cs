@@ -34,6 +34,8 @@ namespace Qiyu.Quest.Editor
         [MenuItem("Qiyu/Setup P0 Quest Scene")]
         public static void SetupP0Scene()
         {
+            // 中文字体是 UI 清晰度的前提：先生成 TMP SDF 资源，再建场景。
+            QiyuFontSetup.EnsureFontAssets();
             ConfigurePlayer();
             ConfigureOpenXR();
             ConfigureRenderPipelineForPassthrough();
@@ -86,6 +88,8 @@ namespace Qiyu.Quest.Editor
             PlayerSettings.SetManagedStrippingLevel(BuildTargetGroup.Android, ManagedStrippingLevel.Medium);
             EditorUserBuildSettings.androidBuildSystem = AndroidBuildSystem.Gradle;
             EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
+            // 世界空间 UI + 真实家具网格都受益于 MSAA 4x。
+            QualitySettings.antiAliasing = 4;
 
             // P4：Passthrough Camera Access 需要在项目配置里开启，
             // 由 Meta 官方 OVRManifestPreprocessor 自动写入 manifest 权限。
@@ -166,7 +170,6 @@ namespace Qiyu.Quest.Editor
             {
                 "com.meta.openxr.feature.metaxr",
                 "com.meta.openxr.feature.foveation",
-                "com.meta.openxr.feature.subsampledLayout",
             })
             {
                 var feature = FeatureHelpers.GetFeatureWithIdForBuildTarget(
@@ -177,6 +180,18 @@ namespace Qiyu.Quest.Editor
                     EditorUtility.SetDirty(feature);
                     Debug.Log($"[QiyuP0Setup] 已启用 OpenXR Feature: {featureId}");
                 }
+            }
+
+            // Subsampled Layout 会进一步降低周边采样密度，是“晃动时边缘锯齿”的
+            // 主要放大器之一；UI 清晰度优先，这里显式关闭。
+            var subsampled = FeatureHelpers.GetFeatureWithIdForBuildTarget(
+                BuildTargetGroup.Android,
+                "com.meta.openxr.feature.subsampledLayout");
+            if (subsampled != null && subsampled.enabled)
+            {
+                subsampled.enabled = false;
+                EditorUtility.SetDirty(subsampled);
+                Debug.Log("[QiyuP0Setup] 已关闭 Subsampled Layout（提升 UI 边缘清晰度）");
             }
             AssetDatabase.SaveAssets();
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -12,23 +13,47 @@ namespace Qiyu.Quest.UI
         void Activate();
     }
 
-    /// <summary>液态玻璃按钮：由 QiyuGazeInteractor 统一做命中/hover/点击。</summary>
+    /// <summary>液体玻璃按钮：弹性 hover / 按下回弹 / 高光增强。</summary>
     public class QiyuUIButton : MonoBehaviour, IQiyuUIInteractable
     {
-        private Image _image;
+        private Image _root;
+        private Image _body;
+        private Image _extrusion;
+        private Image _gloss;
+        private Image _hoverOverlay;
+        private TMP_Text _label;
         private Action _onClick;
-        private Color _normal;
-        private Color _hover;
-        private float _targetScale = 1f;
+        private float _scale = 1f;
+        private float _scaleVelocity;
+        private float _hoverAlpha;
+        private float _hoverTarget;
+        private float _extrusionOffset = -5f;
+        private float _extrusionVelocity;
+        private bool _hover;
 
         public RectTransform Rect => (RectTransform)transform;
 
-        public void Configure(Image image, Action onClick)
+        public void Configure(Image root, Image body, Image extrusion, Image gloss,
+                              TMP_Text label, Action onClick, int height)
         {
-            _image = image;
+            _root = root;
+            _body = body;
+            _extrusion = extrusion;
+            _gloss = gloss;
+            _label = label;
             _onClick = onClick;
-            _normal = image.color;
-            _hover = new Color(1f, 1f, 1f, 0.92f);
+
+            var hover = QiyuUI.CreateRect(transform, "Hover");
+            QiyuUI.Stretch(hover, 1.5f);
+            _hoverOverlay = hover.gameObject.AddComponent<Image>();
+            _hoverOverlay.sprite = QiyuUI.RoundedSprite(
+                Mathf.Min(QiyuUI.RadiusButton, Mathf.Max(8, height / 2)),
+                Color.white, Color.white, 0f);
+            _hoverOverlay.type = Image.Type.Sliced;
+            _hoverOverlay.color = new Color(1f, 1f, 1f, 0f);
+            _hoverOverlay.raycastTarget = false;
+            hover.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
             QiyuGazeInteractor.Register(this);
         }
 
@@ -39,41 +64,167 @@ namespace Qiyu.Quest.UI
 
         public void SetHover(bool hover)
         {
-            if (_image != null)
+            _hover = hover;
+            _hoverTarget = hover ? 0.13f : 0f;
+        }
+
+        public void SetLabel(string text)
+        {
+            if (_label != null)
             {
-                _image.color = hover ? _hover : _normal;
+                _label.text = text ?? "";
             }
-            _targetScale = hover ? 1.06f : 1f;
         }
 
         private void Update()
         {
-            transform.localScale = Vector3.Lerp(transform.localScale,
-                Vector3.one * _targetScale, Time.unscaledDeltaTime * 12f);
+            var dt = Mathf.Max(0.0001f, Time.unscaledDeltaTime);
+            var targetScale = _hover ? 1.045f : 1f;
+            _scale = Mathf.SmoothDamp(_scale, targetScale, ref _scaleVelocity, 0.075f,
+                Mathf.Infinity, dt);
+            transform.localScale = new Vector3(_scale, _scale, 1f);
+
+            _hoverAlpha = Mathf.SmoothDamp(_hoverAlpha, _hoverTarget, ref _hoverAlphaVelocity,
+                0.06f, Mathf.Infinity, dt);
+            if (_hoverOverlay != null)
+            {
+                _hoverOverlay.color = new Color(1f, 1f, 1f, _hoverAlpha);
+            }
+            if (_gloss != null)
+            {
+                var c = _gloss.color;
+                c.a = Mathf.Lerp(1f, 1.35f, _hover ? 1f : 0f);
+                _gloss.color = c;
+            }
+            var extrusionTarget = _hover ? -7f : -5f;
+            _extrusionOffset = Mathf.SmoothDamp(_extrusionOffset, extrusionTarget,
+                ref _extrusionVelocity, 0.07f, Mathf.Infinity, dt);
+            if (_extrusion != null)
+            {
+                _extrusion.rectTransform.anchoredPosition = new Vector2(0f, _extrusionOffset);
+            }
+        }
+
+        private float _hoverAlphaVelocity;
+
+        public void Activate()
+        {
+            _onClick?.Invoke();
+            _scale = 0.955f;
+            _scaleVelocity = 0f;
+            QiyuGazeInteractor.HapticPulse();
+        }
+    }
+
+    /// <summary>顶部标签页：白色胶囊滑动式激活态。</summary>
+    public class QiyuUITab : MonoBehaviour, IQiyuUIInteractable
+    {
+        private Image _background;
+        private TMP_Text _label;
+        private Image _dot;
+        private Action _onClick;
+        private bool _active;
+        private bool _hover;
+        private float _backgroundAlpha;
+        private float _backgroundVelocity;
+        private float _scale = 1f;
+        private float _scaleVelocity;
+
+        public RectTransform Rect => (RectTransform)transform;
+
+        public void Configure(Image background, TMP_Text label, Image dot, Action onClick)
+        {
+            _background = background;
+            _label = label;
+            _dot = dot;
+            _onClick = onClick;
+            ApplyImmediate();
+            QiyuGazeInteractor.Register(this);
+        }
+
+        private void OnDestroy()
+        {
+            QiyuGazeInteractor.Unregister(this);
+        }
+
+        public void SetActive(bool active)
+        {
+            _active = active;
+            ApplyImmediate();
+        }
+
+        public void SetHover(bool hover)
+        {
+            _hover = hover;
         }
 
         public void Activate()
         {
             _onClick?.Invoke();
+            QiyuGazeInteractor.HapticPulse();
+        }
+
+        private void ApplyImmediate()
+        {
+            if (_label != null)
+            {
+                _label.color = _active ? new Color(0.04f, 0.04f, 0.05f)
+                    : QiyuUI.TextSecondary;
+                _label.fontStyle = _active ? FontStyles.Bold : FontStyles.Normal;
+            }
+            if (_dot != null)
+            {
+                _dot.color = new Color(0.04f, 0.04f, 0.05f, _active ? 0.85f : 0f);
+            }
+            _backgroundAlpha = _active ? 0.97f : 0f;
+        }
+
+        private void Update()
+        {
+            var dt = Mathf.Max(0.0001f, Time.unscaledDeltaTime);
+            var targetAlpha = _active ? 0.97f : (_hover ? 0.12f : 0f);
+            _backgroundAlpha = Mathf.SmoothDamp(_backgroundAlpha, targetAlpha,
+                ref _backgroundVelocity, 0.08f, Mathf.Infinity, dt);
+            if (_background != null)
+            {
+                _background.color = new Color(1f, 1f, 1f, _backgroundAlpha);
+            }
+            if (_label != null && !_active)
+            {
+                _label.color = Color.Lerp(QiyuUI.TextSecondary, QiyuUI.TextPrimary,
+                    _hover ? 0.8f : 0f);
+            }
+            var targetScale = _hover ? 1.035f : 1f;
+            _scale = Mathf.SmoothDamp(_scale, targetScale, ref _scaleVelocity, 0.075f,
+                Mathf.Infinity, dt);
+            transform.localScale = new Vector3(_scale, _scale, 1f);
         }
     }
 
+    /// <summary>液体玻璃开关。</summary>
     public class QiyuUIToggle : MonoBehaviour, IQiyuUIInteractable
     {
-        private Image _knob;
+        private Image _track;
+        private Image _knobImage;
+        private RectTransform _knob;
         private Action<bool> _onChanged;
         private bool _value;
-        private RectTransform _knobRect;
+        private bool _hover;
+        private float _knobT;
+        private float _knobVelocity;
 
         public RectTransform Rect => (RectTransform)transform;
         public bool Value => _value;
 
-        public void Configure(Image knob, bool initial, Action<bool> onChanged)
+        public void Configure(Image track, Image knobImage, RectTransform knob,
+                              bool initial, Action<bool> onChanged)
         {
+            _track = track;
+            _knobImage = knobImage;
             _knob = knob;
-            _knobRect = knob.rectTransform;
             _onChanged = onChanged;
             _value = initial;
+            _knobT = initial ? 1f : 0f;
             Apply();
             QiyuGazeInteractor.Register(this);
         }
@@ -85,11 +236,10 @@ namespace Qiyu.Quest.UI
 
         public void SetHover(bool hover)
         {
-            if (_knob != null)
+            _hover = hover;
+            if (_track != null)
             {
-                _knob.color = hover
-                    ? new Color(1f, 1f, 1f, 1f)
-                    : Color.white;
+                _track.color = hover ? new Color(1f, 1f, 1f, 1.15f) : Color.white;
             }
         }
 
@@ -98,28 +248,46 @@ namespace Qiyu.Quest.UI
             _value = !_value;
             Apply();
             _onChanged?.Invoke(_value);
+            QiyuGazeInteractor.HapticPulse();
         }
 
         private void Apply()
         {
-            if (_knob == null)
+            if (_track != null)
             {
-                return;
+                _track.sprite = _value
+                    ? QiyuUI.RoundedSprite(18,
+                        new Color(0.19f, 0.82f, 0.35f, 0.96f),
+                        new Color(0.05f, 0.55f, 0.22f, 0.96f),
+                        new Color(0.62f, 1f, 0.72f, 0.75f),
+                        new Color(0.02f, 0.24f, 0.10f, 0.55f), 1.2f)
+                    : QiyuUI.RoundedSprite(18,
+                        new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.055f),
+                        new Color(1f, 1f, 1f, 0.18f), new Color(1f, 1f, 1f, 0.06f), 1.2f);
+                _track.type = Image.Type.Sliced;
             }
-            _knob.sprite = QiyuUI.RoundedSprite(16,
-                _value ? new Color(0.02f, 0.59f, 0.41f, 0.95f)
-                       : new Color(1f, 1f, 1f, 0.10f),
-                _value ? new Color(0.3f, 0.9f, 0.7f, 0.7f)
-                       : QiyuUI.Border, 2);
-            if (_knobRect != null)
+        }
+
+        private void Update()
+        {
+            var dt = Mathf.Max(0.0001f, Time.unscaledDeltaTime);
+            var target = _value ? 1f : 0f;
+            _knobT = Mathf.SmoothDamp(_knobT, target, ref _knobVelocity, 0.09f,
+                Mathf.Infinity, dt);
+            if (_knob != null)
             {
-                var anchored = _knobRect.anchoredPosition;
-                anchored.x = _value ? -30f : -54f;
-                _knobRect.anchoredPosition = anchored;
+                var x = Mathf.Lerp(4f, 52f, _knobT);
+                _knob.anchoredPosition = new Vector2(x, _knob.anchoredPosition.y);
+            }
+            if (_knobImage != null)
+            {
+                _knobImage.color = Color.Lerp(Color.white, new Color(1f, 1f, 1f, 0.96f),
+                    _knobT);
             }
         }
     }
 
+    /// <summary>液体玻璃滑杆，支持射线点击与拖动。</summary>
     public class QiyuUISlider : MonoBehaviour, IQiyuUIInteractable
     {
         private float _min;
@@ -130,50 +298,53 @@ namespace Qiyu.Quest.UI
         private Image _track;
         private Image _fill;
         private RectTransform _knob;
-        private Text _valueLabel;
+        private TMP_Text _valueLabel;
+        private float _displayT;
+        private float _displayVelocity;
+        private bool _hover;
 
         public RectTransform Rect => (RectTransform)transform;
         public float Value => _value;
 
         public void Configure(float min, float max, float initial,
-                              Action<float> onChanged, string suffix)
+                              Action<float> onChanged, string suffix, TMP_Text valueLabel)
         {
             _min = min;
             _max = max;
             _value = Mathf.Clamp(initial, min, max);
             _onChanged = onChanged;
             _suffix = suffix ?? "";
+            _valueLabel = valueLabel;
 
             _track = gameObject.AddComponent<Image>();
-            _track.sprite = QiyuUI.RoundedSprite(8, new Color(1f, 1f, 1f, 0.08f),
-                new Color(1f, 1f, 1f, 0.10f), 1);
+            _track.sprite = QiyuUI.RoundedSprite(7,
+                new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.05f),
+                new Color(1f, 1f, 1f, 0.16f), new Color(1f, 1f, 1f, 0.05f), 1.2f);
             _track.type = Image.Type.Sliced;
             _track.raycastTarget = false;
 
             var fillRect = QiyuUI.CreateRect(transform, "Fill");
-            QiyuUI.SetAnchored(fillRect, new Vector2(0, 0), new Vector2(0, 1),
-                new Vector2(0, 0), new Vector2(0, 0));
+            QiyuUI.SetAnchored(fillRect, new Vector2(0f, 0f), new Vector2(0f, 1f),
+                new Vector2(0f, 0f), new Vector2(0f, 0f));
             _fill = fillRect.gameObject.AddComponent<Image>();
-            _fill.sprite = QiyuUI.RoundedSprite(8, new Color(0.9f, 0.9f, 0.94f, 0.85f),
-                new Color(1f, 1f, 1f, 0.4f), 1);
+            _fill.sprite = QiyuUI.RoundedSprite(7,
+                new Color(1f, 1f, 1f, 0.95f), new Color(0.74f, 0.80f, 0.90f, 0.92f),
+                new Color(1f, 1f, 1f, 0.75f), new Color(1f, 1f, 1f, 0.30f), 1.2f);
             _fill.type = Image.Type.Sliced;
             _fill.raycastTarget = false;
 
             var knobRect = QiyuUI.CreateRect(transform, "Knob");
-            QiyuUI.SetAnchored(knobRect, new Vector2(0, 0.5f), new Vector2(0, 0.5f),
-                new Vector2(-12, -12), new Vector2(12, 12));
+            QiyuUI.SetAnchored(knobRect, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
+                new Vector2(-15f, -15f), new Vector2(15f, 15f));
             _knob = knobRect;
             var knobImage = knobRect.gameObject.AddComponent<Image>();
-            knobImage.sprite = QiyuUI.RoundedSprite(12, Color.white,
-                new Color(1f, 1f, 1f, 0.6f), 2);
+            knobImage.sprite = QiyuUI.RoundedSprite(15,
+                Color.white, new Color(0.84f, 0.86f, 0.92f, 1f),
+                new Color(1f, 1f, 1f, 0.95f), new Color(0.62f, 0.66f, 0.76f, 0.9f), 1.2f);
             knobImage.type = Image.Type.Sliced;
             knobImage.raycastTarget = false;
 
-            var valueText = QiyuUI.Label(transform, "Value", "", 18, QiyuUI.TextSecondary,
-                TextAnchor.MiddleRight);
-            QiyuUI.SetAnchored(valueText.rectTransform, new Vector2(1, 0.5f),
-                new Vector2(1, 1f), new Vector2(-90, 0), new Vector2(0, 0));
-            _valueLabel = valueText;
+            _displayT = Mathf.InverseLerp(_min, _max, _value);
             Refresh();
             QiyuGazeInteractor.Register(this);
         }
@@ -185,15 +356,15 @@ namespace Qiyu.Quest.UI
 
         public void SetHover(bool hover)
         {
+            _hover = hover;
             if (_track != null)
             {
-                _track.color = hover ? new Color(1f, 1f, 1f, 0.16f) : Color.white;
+                _track.color = hover ? new Color(1f, 1f, 1f, 1.15f) : Color.white;
             }
         }
 
         public void Activate()
         {
-            // 单击在中间位置切换一次；精确拖动由 QiyuGazeInteractor 的 SetFromLocalPoint 处理
             SetValue(Mathf.Approximately(_value, _max) ? _min : _max);
         }
 
@@ -216,44 +387,101 @@ namespace Qiyu.Quest.UI
 
         private void Refresh()
         {
-            var t = Mathf.InverseLerp(_min, _max, _value);
-            var rect = (RectTransform)transform;
-            var width = rect.rect.width;
-            if (_fill != null)
-            {
-                _fill.rectTransform.anchorMax = new Vector2(t, 1f);
-            }
-            if (_knob != null)
-            {
-                _knob.anchorMin = new Vector2(t, 0.5f);
-                _knob.anchorMax = new Vector2(t, 0.5f);
-            }
             if (_valueLabel != null)
             {
                 _valueLabel.text = $"{_value:0.##}{_suffix}";
             }
         }
+
+        private void Update()
+        {
+            var target = Mathf.InverseLerp(_min, _max, _value);
+            var dt = Mathf.Max(0.0001f, Time.unscaledDeltaTime);
+            _displayT = Mathf.SmoothDamp(_displayT, target, ref _displayVelocity, 0.05f,
+                Mathf.Infinity, dt);
+            if (_fill != null)
+            {
+                _fill.rectTransform.anchorMax = new Vector2(_displayT, 1f);
+            }
+            if (_knob != null)
+            {
+                _knob.anchorMin = new Vector2(_displayT, 0.5f);
+                _knob.anchorMax = new Vector2(_displayT, 0.5f);
+            }
+        }
+    }
+
+    /// <summary>输入框包装：点击后弹出 Qiyu 自绘键盘（不依赖 Android 软键盘）。</summary>
+    public class QiyuUIInputField : MonoBehaviour, IQiyuUIInteractable
+    {
+        private TMP_InputField _input;
+        private Image _background;
+        private string _placeholder;
+
+        public RectTransform Rect => (RectTransform)transform;
+        public TMP_InputField Input => _input;
+
+        public void Configure(TMP_InputField input, string placeholder)
+        {
+            _input = input;
+            _placeholder = placeholder;
+            _background = GetComponent<Image>();
+            if (_input != null)
+            {
+                _input.shouldHideMobileInput = true;
+                _input.restoreOriginalTextOnEscape = false;
+            }
+            QiyuGazeInteractor.Register(this);
+        }
+
+        private void OnDestroy()
+        {
+            QiyuGazeInteractor.Unregister(this);
+        }
+
+        public void SetHover(bool hover)
+        {
+            if (_background != null)
+            {
+                _background.color = hover ? new Color(1f, 1f, 1f, 1.10f) : Color.white;
+            }
+        }
+
+        public void Activate()
+        {
+            if (_input == null)
+            {
+                return;
+            }
+            QiyuVirtualKeyboard.Show(_input, _placeholder);
+            QiyuGazeInteractor.HapticPulse();
+        }
     }
 
     /// <summary>
-    /// 手柄射线 / 视线交互：不依赖 OVRRaycaster/EventSystem，命中注册的世界空间 UI 元素。
-    /// 右手控制器可用时优先用手柄射线，否则用头部视线。
+    /// 手柄射线 / 手部捏合 / 头部视线交互。
+    /// 不依赖 OVRRaycaster 或 EventSystem，直接对注册的世界空间 UI 做平面命中。
     /// </summary>
     public class QiyuGazeInteractor : MonoBehaviour
     {
         private static readonly List<IQiyuUIInteractable> Targets =
             new List<IQiyuUIInteractable>();
 
+        /// <summary>模态根节点（例如自绘键盘）；非空时只允许命中该节点下的 UI。</summary>
+        public static Transform ModalRoot;
+
         [SerializeField] private Transform head;
         [SerializeField] private Transform rightHand;
-        [SerializeField] private float maxDistance = 8f;
+        [SerializeField] private Transform leftHand;
+        [SerializeField] private float maxDistance = 10f;
         [SerializeField] private bool preferController = true;
         [SerializeField] private bool preferHands = true;
-        [SerializeField] private Color rayColor = new Color(1f, 1f, 1f, 0.55f);
+        [SerializeField] private Color rayColor = new Color(0.42f, 0.84f, 1f, 0.72f);
 
         private IQiyuUIInteractable _hovered;
         private LineRenderer _line;
         private Transform _dot;
+        private Transform _dotGlow;
         private OVRHand[] _hands;
         private bool _wasPinching;
 
@@ -270,28 +498,37 @@ namespace Qiyu.Quest.UI
             Targets.Remove(target);
         }
 
+        public static void HapticPulse()
+        {
+            try
+            {
+                OVRInput.SetControllerVibration(0.18f, 0.35f, OVRInput.Controller.RTouch);
+                OVRInput.SetControllerVibration(0.18f, 0.35f, OVRInput.Controller.LTouch);
+            }
+            catch
+            {
+                // 手柄不可用时忽略。
+            }
+        }
+
         private void Start()
         {
             if (head == null)
             {
                 var centerEye = GameObject.Find("CenterEyeAnchor");
-                if (centerEye != null)
-                {
-                    head = centerEye.transform;
-                }
-                else if (Camera.main != null)
-                {
-                    head = Camera.main.transform;
-                }
+                head = centerEye != null ? centerEye.transform : Camera.main?.transform;
             }
             if (rightHand == null)
             {
                 var right = GameObject.Find("RightHandAnchor") ??
                             GameObject.Find("RightControllerAnchor");
-                if (right != null)
-                {
-                    rightHand = right.transform;
-                }
+                rightHand = right != null ? right.transform : null;
+            }
+            if (leftHand == null)
+            {
+                var left = GameObject.Find("LeftHandAnchor") ??
+                           GameObject.Find("LeftControllerAnchor");
+                leftHand = left != null ? left.transform : null;
             }
             _hands = FindObjectsByType<OVRHand>(FindObjectsInactive.Include,
                 FindObjectsSortMode.None);
@@ -303,25 +540,27 @@ namespace Qiyu.Quest.UI
             var shader = Shader.Find("Sprites/Default") ??
                          Shader.Find("UI/Default") ??
                          Shader.Find("Unlit/Color");
+
             var lineObject = new GameObject("QiyuRay");
             lineObject.transform.SetParent(null, false);
             _line = lineObject.AddComponent<LineRenderer>();
             _line.positionCount = 2;
-            _line.startWidth = 0.006f;
-            _line.endWidth = 0.003f;
+            _line.startWidth = 0.0055f;
+            _line.endWidth = 0.0022f;
             if (shader != null)
             {
                 _line.material = new Material(shader) { color = rayColor };
             }
             _line.startColor = rayColor;
-            _line.endColor = new Color(rayColor.r, rayColor.g, rayColor.b, 0.1f);
+            _line.endColor = new Color(rayColor.r, rayColor.g, rayColor.b, 0.08f);
             _line.useWorldSpace = true;
+            _line.numCapVertices = 4;
             _line.enabled = false;
 
             var dot = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             dot.name = "QiyuRayDot";
             dot.transform.SetParent(null, false);
-            dot.transform.localScale = Vector3.one * 0.02f;
+            dot.transform.localScale = Vector3.one * 0.018f;
             Destroy(dot.GetComponent<Collider>());
             var renderer = dot.GetComponent<Renderer>();
             if (shader != null)
@@ -330,6 +569,21 @@ namespace Qiyu.Quest.UI
             }
             _dot = dot.transform;
             _dot.gameObject.SetActive(false);
+
+            var glow = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            glow.name = "QiyuRayGlow";
+            glow.transform.SetParent(_dot, false);
+            glow.transform.localScale = Vector3.one * 2.6f;
+            Destroy(glow.GetComponent<Collider>());
+            var glowRenderer = glow.GetComponent<Renderer>();
+            if (shader != null)
+            {
+                glowRenderer.material = new Material(shader)
+                {
+                    color = new Color(rayColor.r, rayColor.g, rayColor.b, 0.16f)
+                };
+            }
+            _dotGlow = glow.transform;
         }
 
         private void OnDestroy()
@@ -351,6 +605,7 @@ namespace Qiyu.Quest.UI
             var hasRay = false;
             var clickPressed = false;
             OVRHand activeHand = null;
+
             if (preferHands && _hands != null)
             {
                 foreach (var hand in _hands)
@@ -362,6 +617,7 @@ namespace Qiyu.Quest.UI
                     }
                 }
             }
+
             if (activeHand != null)
             {
                 origin = activeHand.PointerPose.position;
@@ -385,6 +641,7 @@ namespace Qiyu.Quest.UI
                 clickPressed = ControllerClickPressed();
                 hasRay = true;
             }
+
             if (!hasRay)
             {
                 return;
@@ -396,6 +653,10 @@ namespace Qiyu.Quest.UI
             foreach (var target in Targets)
             {
                 if (target?.Rect == null || !target.Rect.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+                if (ModalRoot != null && !target.Rect.IsChildOf(ModalRoot))
                 {
                     continue;
                 }
@@ -446,17 +707,20 @@ namespace Qiyu.Quest.UI
                 }
             }
 
-            if (hitTarget != null && clickPressed)
+            if (hitTarget == null || !clickPressed)
             {
-                if (hitTarget is QiyuUISlider slider)
-                {
-                    var local = slider.Rect.InverseTransformPoint(hitPoint);
-                    slider.SetFromLocalPoint(local.x, slider.Rect.rect.width);
-                }
-                else
-                {
-                    hitTarget.Activate();
-                }
+                return;
+            }
+
+            if (hitTarget is QiyuUISlider slider)
+            {
+                var local = slider.Rect.InverseTransformPoint(hitPoint);
+                slider.SetFromLocalPoint(local.x, slider.Rect.rect.width);
+                HapticPulse();
+            }
+            else
+            {
+                hitTarget.Activate();
             }
         }
 
@@ -464,7 +728,8 @@ namespace Qiyu.Quest.UI
         {
             return OVRInput.GetDown(OVRInput.Button.PrimaryIndexTrigger) ||
                    OVRInput.GetDown(OVRInput.Button.SecondaryIndexTrigger) ||
-                   OVRInput.GetDown(OVRInput.Button.One);
+                   OVRInput.GetDown(OVRInput.Button.One) ||
+                   OVRInput.GetDown(OVRInput.Button.Three);
         }
     }
 }

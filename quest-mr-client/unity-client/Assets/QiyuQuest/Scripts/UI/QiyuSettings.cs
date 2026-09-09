@@ -73,6 +73,30 @@ namespace Qiyu.Quest.UI
             set => Set(Prefix + "avatar_height", Mathf.Clamp(value, -1f, 1f));
         }
 
+        public static float AvatarRotation
+        {
+            get => PlayerPrefs.GetFloat(Prefix + "avatar_rotation", 0f);
+            set => Set(Prefix + "avatar_rotation", Mathf.Clamp(value, -180f, 180f));
+        }
+
+        public static float RenderScale
+        {
+            get => PlayerPrefs.GetFloat(Prefix + "render_scale", 1.15f);
+            set => Set(Prefix + "render_scale", Mathf.Clamp(value, 1f, 1.4f));
+        }
+
+        public static bool LowFoveation
+        {
+            get => PlayerPrefs.GetInt(Prefix + "low_foveation", 1) == 1;
+            set => Set(Prefix + "low_foveation", value ? 1 : 0);
+        }
+
+        public static float PanelDistance
+        {
+            get => PlayerPrefs.GetFloat(Prefix + "panel_distance", 1.95f);
+            set => Set(Prefix + "panel_distance", Mathf.Clamp(value, 1.2f, 3f));
+        }
+
         public static bool AutoConnect
         {
             get => PlayerPrefs.GetInt(Prefix + "auto_connect", 1) == 1;
@@ -92,6 +116,10 @@ namespace Qiyu.Quest.UI
             PlayerPrefs.DeleteKey(Prefix + "avatar_url");
             PlayerPrefs.DeleteKey(Prefix + "avatar_scale");
             PlayerPrefs.DeleteKey(Prefix + "avatar_height");
+            PlayerPrefs.DeleteKey(Prefix + "avatar_rotation");
+            PlayerPrefs.DeleteKey(Prefix + "render_scale");
+            PlayerPrefs.DeleteKey(Prefix + "low_foveation");
+            PlayerPrefs.DeleteKey(Prefix + "panel_distance");
             PlayerPrefs.DeleteKey(Prefix + "auto_connect");
             PlayerPrefs.Save();
         }
