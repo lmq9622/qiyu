@@ -198,7 +198,7 @@ namespace Qiyu.Quest.UI
             if (_label != null)
             {
                 _label.color = _active ? new Color(0.04f, 0.04f, 0.05f)
-                    : QiyuUI.TextSecondary;
+                    : QiyuUI.TextOnDarkSecondary;
                 _label.fontStyle = _active ? FontStyles.Bold : FontStyles.Normal;
             }
             if (_dot != null)
@@ -220,7 +220,8 @@ namespace Qiyu.Quest.UI
             }
             if (_label != null && !_active)
             {
-                _label.color = Color.Lerp(QiyuUI.TextSecondary, QiyuUI.TextPrimary,
+                _label.color = Color.Lerp(QiyuUI.TextOnDarkSecondary,
+                    QiyuUI.TextOnDarkPrimary,
                     _hover ? 0.8f : 0f);
             }
             var targetScale = _hover ? 1.035f : 1f;
@@ -380,8 +381,10 @@ namespace Qiyu.Quest.UI
 
             _track = gameObject.AddComponent<Image>();
             _track.sprite = QiyuUI.RoundedSprite(7,
-                new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.05f),
-                new Color(1f, 1f, 1f, 0.16f), new Color(1f, 1f, 1f, 0.05f), 1.2f);
+                new Color(0.05f, 0.10f, 0.20f, 0.10f),
+                new Color(0.05f, 0.10f, 0.20f, 0.05f),
+                new Color(0.10f, 0.15f, 0.25f, 0.16f),
+                new Color(0.10f, 0.15f, 0.25f, 0.05f), 1.2f);
             _track.type = Image.Type.Sliced;
             _track.raycastTarget = true;
 
@@ -390,8 +393,10 @@ namespace Qiyu.Quest.UI
                 new Vector2(0f, 0f), new Vector2(0f, 0f));
             _fill = fillRect.gameObject.AddComponent<Image>();
             _fill.sprite = QiyuUI.RoundedSprite(7,
-                new Color(1f, 1f, 1f, 0.95f), new Color(0.74f, 0.80f, 0.90f, 0.92f),
-                new Color(1f, 1f, 1f, 0.75f), new Color(1f, 1f, 1f, 0.30f), 1.2f);
+                new Color(0.20f, 0.55f, 1f, 0.95f),
+                new Color(0.05f, 0.35f, 0.85f, 0.92f),
+                new Color(0.65f, 0.85f, 1f, 0.75f),
+                new Color(0.02f, 0.18f, 0.45f, 0.55f), 1.2f);
             _fill.type = Image.Type.Sliced;
             _fill.raycastTarget = false;
 

@@ -508,15 +508,15 @@ namespace Qiyu.Quest.UI
             QiyuUI.SetAnchored(logo.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                 new Vector2(0f, -28f), new Vector2(56f, 28f));
             var logoLabel = QiyuUI.Label(logo.rectTransform, "Glyph", "栖", 26,
-                QiyuUI.TextPrimary, TextAnchor.MiddleCenter, true);
+                QiyuUI.TextOnDarkPrimary, TextAnchor.MiddleCenter, true);
             QiyuUI.Stretch(logoLabel.rectTransform);
 
-            var title = QiyuUI.Label(top, "Title", "栖语", 24, QiyuUI.TextPrimary,
+            var title = QiyuUI.Label(top, "Title", "栖语", 24, QiyuUI.TextOnDarkPrimary,
                 TextAnchor.UpperLeft, true);
             QiyuUI.SetAnchored(title.rectTransform, new Vector2(0f, 0f), new Vector2(0.45f, 1f),
                 new Vector2(72f, 24f), new Vector2(0f, -4f));
             var subtitle = QiyuUI.Label(top, "Subtitle", "Quest MR Companion", 12,
-                QiyuUI.TextTertiary, TextAnchor.LowerLeft);
+                QiyuUI.TextOnDarkTertiary, TextAnchor.LowerLeft);
             QiyuUI.SetAnchored(subtitle.rectTransform, new Vector2(0f, 0f),
                 new Vector2(0.45f, 1f), new Vector2(74f, 6f), new Vector2(0f, -46f));
 
@@ -536,13 +536,13 @@ namespace Qiyu.Quest.UI
                 new Vector2(1f, 1f), new Vector2(38f, 0f), new Vector2(-12f, 0f));
 
             _modeButton = QiyuUI.Button(top, "PanelMode", "固定 6DoF", TogglePanelMode,
-                QiyuButtonVariant.Glass, 16, 44);
+                QiyuButtonVariant.DarkGlass, 16, 44);
             QiyuUI.SetAnchored((RectTransform)_modeButton.transform,
                 new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
                 new Vector2(-340f, -22f), new Vector2(-175f, 22f));
 
             var recenter = QiyuUI.Button(top, "Recenter", "重置位置", Recenter,
-                QiyuButtonVariant.Glass, 16, 44);
+                QiyuButtonVariant.DarkGlass, 16, 44);
             QiyuUI.SetAnchored((RectTransform)recenter.transform,
                 new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
                 new Vector2(-165f, -22f), new Vector2(-5f, 22f));
@@ -573,12 +573,12 @@ namespace Qiyu.Quest.UI
                 new Vector2(1f, 0f), new Vector2(Outer, Outer),
                 new Vector2(-Outer, Outer + BottomBarHeight));
             _bottomStatus = QiyuUI.Label(bottom.rectTransform, "Status", "", 16,
-                QiyuUI.TextSecondary, TextAnchor.MiddleLeft, false, false);
+                QiyuUI.TextOnDarkSecondary, TextAnchor.MiddleLeft, false, false);
             QiyuUI.SetAnchored(_bottomStatus.rectTransform, new Vector2(0f, 0f),
                 new Vector2(0.78f, 1f), new Vector2(22f, 0f), Vector2.zero);
             var hint = QiyuUI.Label(bottom.rectTransform, "Hint",
                 "左摇杆滚动 · 摇杆按下重新居中 · 手柄扳机 / 手部捏合点击", 15,
-                QiyuUI.TextTertiary, TextAnchor.MiddleRight, false, false);
+                QiyuUI.TextOnDarkTertiary, TextAnchor.MiddleRight, false, false);
             QiyuUI.SetAnchored(hint.rectTransform, new Vector2(0.72f, 0f),
                 new Vector2(1f, 1f), Vector2.zero, new Vector2(-22f, 0f));
         }
@@ -596,7 +596,7 @@ namespace Qiyu.Quest.UI
             handleImage.type = Image.Type.Sliced;
             handleImage.raycastTarget = true;
             var label = QiyuUI.Label(_dragHandle, "Glyph", "•••", 16,
-                QiyuUI.TextTertiary, TextAnchor.MiddleCenter, true, false);
+                QiyuUI.TextOnDarkTertiary, TextAnchor.MiddleCenter, true, false);
             QiyuUI.Stretch(label.rectTransform);
             var drag = _dragHandle.gameObject.AddComponent<QiyuPanelDragHandle>();
             drag.Initialize(this);
