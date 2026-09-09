@@ -10,6 +10,7 @@ using Qiyu.Quest.Spatial;
 using Qiyu.Quest.Voice;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace Qiyu.Quest.UI
@@ -39,14 +40,13 @@ namespace Qiyu.Quest.UI
         [Header("面板")]
         [SerializeField] private float panelScale = 0.00105f;
         [SerializeField] private bool visible = true;
-        [SerializeField] private bool followUser = false;
 
         private const float CanvasWidth = 1680f;
         private const float CanvasHeight = 1050f;
-        private const float Outer = 28f;
-        private const float TopBarHeight = 104f;
-        private const float TabBarHeight = 76f;
-        private const float BottomBarHeight = 56f;
+        private const float Outer = 24f;
+        private const float TopBarHeight = 88f;
+        private const float TabBarHeight = 68f;
+        private const float BottomBarHeight = 52f;
 
         private static readonly string[] Tabs =
         {
@@ -59,6 +59,12 @@ namespace Qiyu.Quest.UI
         private ScrollRect _scrollRect;
         private QiyuVirtualKeyboard _keyboard;
         private QiyuRenderQuality _renderQuality;
+        private QiyuUIButton _modeButton;
+        private RectTransform _dragHandle;
+        private bool _dragging;
+        private Vector3 _dragStartCanvasPosition;
+        private Vector3 _dragStartHitPoint;
+        private Vector3 _dragPlaneNormal;
 
         private TMP_Text _connText;
         private Image _connDot;
@@ -211,7 +217,12 @@ namespace Qiyu.Quest.UI
             {
                 return;
             }
-            if (followUser && followTarget != null)
+            if (_dragging)
+            {
+                return;
+            }
+            if (QiyuSettings.PanelMode == (int)QiyuPanelMode.Motion3DoF &&
+                followTarget != null)
             {
                 PlaceInFrontOfUser();
             }
@@ -338,6 +349,17 @@ namespace Qiyu.Quest.UI
             _canvasRect.sizeDelta = new Vector2(CanvasWidth, CanvasHeight);
             _canvasRect.localScale = Vector3.one * panelScale;
 
+            var raycaster = canvasObject.AddComponent<OVRRaycaster>();
+            raycaster.sortOrder = 200;
+            if (followTarget != null)
+            {
+                var eyeCamera = followTarget.GetComponent<Camera>();
+                if (eyeCamera != null)
+                {
+                    _canvas.worldCamera = eyeCamera;
+                }
+            }
+
             var root = QiyuUI.Panel(canvasObject.transform, "Root", true,
                 QiyuUI.RadiusPanel, 1f);
             QiyuUI.Stretch(root.rectTransform);
@@ -349,10 +371,12 @@ namespace Qiyu.Quest.UI
                 QiyuUI.Space6);
             QiyuUI.SetAnchored((RectTransform)scrollRoot.transform,
                 new Vector2(0f, 0f), new Vector2(1f, 1f),
-                new Vector2(Outer, 96f), new Vector2(-Outer, -244f));
+                new Vector2(Outer, 88f),
+                new Vector2(-Outer, -(Outer + TopBarHeight + 20f + TabBarHeight + 16f)));
             _scrollRect = scrollRoot.GetComponent<ScrollRect>();
 
             BuildBottomBar(canvasObject.transform);
+            BuildDragHandle(canvasObject.transform);
 
             var keyboardObject = new GameObject("QiyuVirtualKeyboard",
                 typeof(RectTransform), typeof(QiyuVirtualKeyboard));
@@ -360,9 +384,9 @@ namespace Qiyu.Quest.UI
             _keyboard = keyboardObject.GetComponent<QiyuVirtualKeyboard>();
             _keyboard.Build(_canvasRect);
 
-            canvasObject.AddComponent<QiyuGazeInteractor>();
             _renderQuality = canvasObject.AddComponent<QiyuRenderQuality>();
             _renderQuality.ApplyFromSettings();
+            ApplyPanelMode();
         }
 
         private void BuildTopBar(Transform parent)
@@ -374,28 +398,28 @@ namespace Qiyu.Quest.UI
 
             var logo = QiyuUI.Panel(top, "LogoMark", true, 20);
             QiyuUI.SetAnchored(logo.rectTransform, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                new Vector2(0f, -32f), new Vector2(64f, 32f));
-            var logoLabel = QiyuUI.Label(logo.rectTransform, "Glyph", "栖", 30,
+                new Vector2(0f, -28f), new Vector2(56f, 28f));
+            var logoLabel = QiyuUI.Label(logo.rectTransform, "Glyph", "栖", 26,
                 QiyuUI.TextPrimary, TextAnchor.MiddleCenter, true);
             QiyuUI.Stretch(logoLabel.rectTransform);
 
-            var title = QiyuUI.Label(top, "Title", "栖语", 30, QiyuUI.TextPrimary,
+            var title = QiyuUI.Label(top, "Title", "栖语", 24, QiyuUI.TextPrimary,
                 TextAnchor.UpperLeft, true);
             QiyuUI.SetAnchored(title.rectTransform, new Vector2(0f, 0f), new Vector2(0.45f, 1f),
-                new Vector2(82f, 28f), new Vector2(0f, -6f));
-            var subtitle = QiyuUI.Label(top, "Subtitle", "Quest MR Companion", 15,
+                new Vector2(72f, 24f), new Vector2(0f, -4f));
+            var subtitle = QiyuUI.Label(top, "Subtitle", "Quest MR Companion", 12,
                 QiyuUI.TextTertiary, TextAnchor.LowerLeft);
             QiyuUI.SetAnchored(subtitle.rectTransform, new Vector2(0f, 0f),
-                new Vector2(0.45f, 1f), new Vector2(84f, 8f), new Vector2(0f, -52f));
+                new Vector2(0.45f, 1f), new Vector2(74f, 6f), new Vector2(0f, -46f));
 
             _sessionText = QiyuUI.Label(top, "Session", "session: -", 15,
                 QiyuUI.TextTertiary, TextAnchor.MiddleRight, false, false);
-            QiyuUI.SetAnchored(_sessionText.rectTransform, new Vector2(0.42f, 0f),
-                new Vector2(0.72f, 1f), Vector2.zero, Vector2.zero);
+            QiyuUI.SetAnchored(_sessionText.rectTransform, new Vector2(0.28f, 0f),
+                new Vector2(0.55f, 1f), Vector2.zero, Vector2.zero);
 
             var chip = QiyuUI.Panel(top, "ConnChip", false, 16);
             QiyuUI.SetAnchored(chip.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-392f, -20f), new Vector2(-180f, 20f));
+                new Vector2(-540f, -20f), new Vector2(-350f, 20f));
             var dot = QiyuUI.CreateRect(chip.rectTransform, "Dot");
             QiyuUI.SetAnchored(dot, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
                 new Vector2(16f, -7f), new Vector2(30f, 7f));
@@ -408,11 +432,17 @@ namespace Qiyu.Quest.UI
             QiyuUI.SetAnchored(_connText.rectTransform, new Vector2(0f, 0f),
                 new Vector2(1f, 1f), new Vector2(38f, 0f), new Vector2(-12f, 0f));
 
-            var recenter = QiyuUI.Button(top, "Recenter", "重新居中", Recenter,
-                QiyuButtonVariant.Glass, 18, 48);
+            _modeButton = QiyuUI.Button(top, "PanelMode", "固定 6DoF", TogglePanelMode,
+                QiyuButtonVariant.Glass, 16, 44);
+            QiyuUI.SetAnchored((RectTransform)_modeButton.transform,
+                new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                new Vector2(-340f, -22f), new Vector2(-175f, 22f));
+
+            var recenter = QiyuUI.Button(top, "Recenter", "重置位置", Recenter,
+                QiyuButtonVariant.Glass, 16, 44);
             QiyuUI.SetAnchored((RectTransform)recenter.transform,
                 new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                new Vector2(-168f, -24f), new Vector2(0f, 24f));
+                new Vector2(-165f, -22f), new Vector2(-5f, 22f));
         }
 
         private void BuildTabBar(Transform parent)
@@ -448,6 +478,116 @@ namespace Qiyu.Quest.UI
                 QiyuUI.TextTertiary, TextAnchor.MiddleRight, false, false);
             QiyuUI.SetAnchored(hint.rectTransform, new Vector2(0.72f, 0f),
                 new Vector2(1f, 1f), Vector2.zero, new Vector2(-22f, 0f));
+        }
+
+        /// <summary>visionOS 风格窗口顶部拖动条；只在 6DoF 固定模式显示。</summary>
+        private void BuildDragHandle(Transform parent)
+        {
+            _dragHandle = QiyuUI.CreateRect(parent, "DragHandle");
+            QiyuUI.SetAnchored(_dragHandle, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f),
+                new Vector2(-58f, -20f), new Vector2(58f, -8f));
+            var handleImage = _dragHandle.gameObject.AddComponent<Image>();
+            handleImage.sprite = QiyuUI.RoundedSprite(12,
+                new Color(1f, 1f, 1f, 0.13f), new Color(1f, 1f, 1f, 0.055f),
+                new Color(1f, 1f, 1f, 0.22f), new Color(1f, 1f, 1f, 0.06f), 1.1f);
+            handleImage.type = Image.Type.Sliced;
+            handleImage.raycastTarget = true;
+            var label = QiyuUI.Label(_dragHandle, "Glyph", "•••", 16,
+                QiyuUI.TextTertiary, TextAnchor.MiddleCenter, true, false);
+            QiyuUI.Stretch(label.rectTransform);
+            var drag = _dragHandle.gameObject.AddComponent<QiyuPanelDragHandle>();
+            drag.Initialize(this);
+        }
+
+        private void TogglePanelMode()
+        {
+            QiyuSettings.PanelMode = QiyuSettings.PanelMode ==
+                                     (int)QiyuPanelMode.Fixed6DoF
+                ? (int)QiyuPanelMode.Motion3DoF
+                : (int)QiyuPanelMode.Fixed6DoF;
+            ApplyPanelMode();
+        }
+
+        private void ApplyPanelMode()
+        {
+            var fixedMode = QiyuSettings.PanelMode == (int)QiyuPanelMode.Fixed6DoF;
+            _modeButton?.SetLabel(fixedMode ? "固定 6DoF" : "运动 3DoF");
+            if (_dragHandle != null)
+            {
+                _dragHandle.gameObject.SetActive(fixedMode);
+            }
+            if (!fixedMode)
+            {
+                Recenter();
+            }
+        }
+
+        public void BeginPanelDrag(PointerEventData eventData)
+        {
+            if (_canvasRect == null ||
+                QiyuSettings.PanelMode != (int)QiyuPanelMode.Fixed6DoF)
+            {
+                return;
+            }
+            _dragging = true;
+            _dragStartCanvasPosition = _canvasRect.position;
+            _dragPlaneNormal = -_canvasRect.forward;
+            var ray = GetPointerRay(eventData);
+            var plane = new Plane(_dragPlaneNormal, _canvasRect.position);
+            _dragStartHitPoint = plane.Raycast(ray, out var enter)
+                ? ray.GetPoint(enter)
+                : _canvasRect.position;
+        }
+
+        public void DragPanel(PointerEventData eventData)
+        {
+            if (!_dragging || _canvasRect == null)
+            {
+                return;
+            }
+            var ray = GetPointerRay(eventData);
+            var plane = new Plane(_dragPlaneNormal, _dragStartCanvasPosition);
+            if (!plane.Raycast(ray, out var enter))
+            {
+                return;
+            }
+            var newHit = ray.GetPoint(enter);
+            var newPosition = _dragStartCanvasPosition + (newHit - _dragStartHitPoint);
+            if (followTarget != null)
+            {
+                var head = followTarget.position;
+                var toPanel = newPosition - head;
+                var distance = toPanel.magnitude;
+                if (distance < 0.6f)
+                {
+                    newPosition = head + toPanel.normalized * 0.6f;
+                }
+                else if (distance > 5f)
+                {
+                    newPosition = head + toPanel.normalized * 5f;
+                }
+            }
+            _canvasRect.position = newPosition;
+        }
+
+        public void EndPanelDrag(PointerEventData eventData)
+        {
+            _dragging = false;
+        }
+
+        private static Ray GetPointerRay(PointerEventData eventData)
+        {
+            if (eventData is OVRPointerEventData vrData &&
+                vrData.worldSpaceRay.direction.sqrMagnitude > 0.0001f)
+            {
+                return vrData.worldSpaceRay;
+            }
+            var camera = eventData.pressEventCamera ?? Camera.main;
+            if (camera != null)
+            {
+                return camera.ScreenPointToRay(eventData.position);
+            }
+            return new Ray(Vector3.zero, Vector3.forward);
         }
 
         private void ShowTab(string tab)
@@ -926,8 +1066,15 @@ namespace Qiyu.Quest.UI
                 value => QiyuSettings.CharId = value);
             QiyuUI.Toggle(conn.transform, "AutoConnect", "启动时自动连接",
                 QiyuSettings.AutoConnect, value => QiyuSettings.AutoConnect = value);
-            QiyuUI.Toggle(conn.transform, "Follow", "面板跟随头部（关闭 = 固定在空间中）",
-                followUser, value => followUser = value);
+            QiyuUI.Toggle(conn.transform, "FixedMode",
+                "固定屏幕模式 6DoF（关闭 = 运动模式 3DoF 跟随头部）",
+                QiyuSettings.PanelMode == (int)QiyuPanelMode.Fixed6DoF, value =>
+                {
+                    QiyuSettings.PanelMode = value
+                        ? (int)QiyuPanelMode.Fixed6DoF
+                        : (int)QiyuPanelMode.Motion3DoF;
+                    ApplyPanelMode();
+                });
             var connRow = QiyuUI.HBox(conn.transform, "Actions", 12f);
             QiyuUI.Layout(connRow.gameObject, 58f);
             QiyuUI.Button(connRow, "Recenter", "重新居中", Recenter,

@@ -69,7 +69,8 @@ namespace Qiyu.Quest.UI
             QiyuUI.Stretch(backdrop);
             var backdropImage = backdrop.gameObject.AddComponent<Image>();
             backdropImage.color = new Color(0f, 0f, 0f, 0.48f);
-            backdropImage.raycastTarget = false;
+            // 键盘打开时挡住后面的面板，避免射线穿透点击到设置项。
+            backdropImage.raycastTarget = true;
             backdrop.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
             var panel = QiyuUI.Card(_root, "KeyboardPanel", true,

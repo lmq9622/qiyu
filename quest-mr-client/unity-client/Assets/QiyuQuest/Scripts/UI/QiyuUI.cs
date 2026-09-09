@@ -29,20 +29,20 @@ namespace Qiyu.Quest.UI
         // ---------------- 颜色 ----------------
         public static readonly Color BgBase = Hex("#08080B");
         public static readonly Color Surface = Hex("#15151A");
-        public static readonly Color GlassTop = new Color(0.176f, 0.180f, 0.212f, 0.72f);
-        public static readonly Color GlassBottom = new Color(0.075f, 0.078f, 0.098f, 0.58f);
-        public static readonly Color GlassStrongTop = new Color(0.220f, 0.224f, 0.263f, 0.90f);
-        public static readonly Color GlassStrongBottom = new Color(0.098f, 0.102f, 0.125f, 0.82f);
-        public static readonly Color BorderTop = new Color(1f, 1f, 1f, 0.22f);
-        public static readonly Color BorderBottom = new Color(1f, 1f, 1f, 0.055f);
+        public static readonly Color GlassTop = new Color(0.145f, 0.152f, 0.190f, 0.58f);
+        public static readonly Color GlassBottom = new Color(0.070f, 0.075f, 0.095f, 0.50f);
+        public static readonly Color GlassStrongTop = new Color(0.195f, 0.205f, 0.250f, 0.72f);
+        public static readonly Color GlassStrongBottom = new Color(0.090f, 0.095f, 0.120f, 0.66f);
+        public static readonly Color BorderTop = new Color(1f, 1f, 1f, 0.17f);
+        public static readonly Color BorderBottom = new Color(1f, 1f, 1f, 0.045f);
         public static readonly Color Border = new Color(1f, 1f, 1f, 0.12f);
         public static readonly Color TextPrimary = Hex("#F5F5F7");
-        public static readonly Color TextSecondary = Hex("#B8B8C2");
-        public static readonly Color TextTertiary = Hex("#7E7E8A");
+        public static readonly Color TextSecondary = Hex("#A7A7B0");
+        public static readonly Color TextTertiary = Hex("#6E6E78");
         public static readonly Color Success = Hex("#30D158");
         public static readonly Color Warning = Hex("#FFD60A");
         public static readonly Color Danger = Hex("#FF453A");
-        public static readonly Color Accent = Hex("#64D2FF");
+        public static readonly Color Accent = Hex("#0A84FF");
         public static readonly Color AccentWarm = Hex("#FF9F0A");
         public static readonly Color ChipBg = new Color(1f, 1f, 1f, 0.055f);
 
@@ -55,10 +55,10 @@ namespace Qiyu.Quest.UI
         public const float Space6 = 24f;
         public const float Space8 = 32f;
         public const float Space10 = 40f;
-        public const int RadiusCard = 30;
-        public const int RadiusPanel = 38;
-        public const int RadiusButton = 20;
-        public const int RadiusSmall = 16;
+        public const int RadiusCard = 34;
+        public const int RadiusPanel = 42;
+        public const int RadiusButton = 18;
+        public const int RadiusSmall = 18;
         public const int RadiusInput = 18;
 
         /// <summary>兼容旧调用；TMP SDF 不再需要字号补偿。</summary>
@@ -405,6 +405,39 @@ namespace Qiyu.Quest.UI
             return _noiseSprite;
         }
 
+        /// <summary>对角线性渐变，用于液态玻璃的镜面扫光。</summary>
+        public static Sprite LinearGradientSprite(int size, Color start, Color end,
+                                                  float angleDegrees = 135f)
+        {
+            size = Mathf.Clamp(size, 16, 512);
+            var key = $"lin{size}:{C(start)}:{C(end)}:{angleDegrees:0.#}";
+            if (SpriteCache.TryGetValue(key, out var cached))
+            {
+                return cached;
+            }
+            var tex = NewTexture(size, size);
+            var pixels = new Color32[size * size];
+            var angle = angleDegrees * Mathf.Deg2Rad;
+            var direction = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)).normalized;
+            for (var y = 0; y < size; y++)
+            {
+                for (var x = 0; x < size; x++)
+                {
+                    var uv = new Vector2(x / (float)(size - 1), y / (float)(size - 1));
+                    var t = Mathf.Clamp01(Vector2.Dot(uv - new Vector2(0.5f, 0.5f),
+                        direction) + 0.5f);
+                    pixels[y * size + x] = Color.Lerp(start, end, t);
+                }
+            }
+            tex.SetPixels32(pixels);
+            tex.Apply(true, false);
+            var sprite = Sprite.Create(tex, new Rect(0, 0, size, size),
+                new Vector2(0.5f, 0.5f), BasePixelsPerUnit);
+            sprite.name = key;
+            SpriteCache[key] = sprite;
+            return sprite;
+        }
+
         private static Texture2D NewTexture(int width, int height)
         {
             return new Texture2D(width, height, TextureFormat.RGBA32, true)
@@ -433,9 +466,7 @@ namespace Qiyu.Quest.UI
             rootImage.color = new Color(1f, 1f, 1f, 0f);
             rootImage.raycastTarget = false;
 
-            AddShadow(root, "ShadowFar", radius, new Vector2(0f, -20f), 20f, 0.20f * alpha);
-            AddShadow(root, "ShadowMid", radius, new Vector2(0f, -12f), 11f, 0.16f * alpha);
-            AddShadow(root, "ShadowNear", radius, new Vector2(0f, -5f), 5f, 0.14f * alpha);
+            AddShadow(root, "Shadow", radius, new Vector2(0f, -14f), 14f, 0.24f * alpha);
 
             var top = strong ? GlassStrongTop : GlassTop;
             var bottom = strong ? GlassStrongBottom : GlassBottom;
@@ -452,11 +483,21 @@ namespace Qiyu.Quest.UI
             Stretch(sheen, 2f);
             var sheenImage = sheen.gameObject.AddComponent<Image>();
             sheenImage.sprite = RoundedSprite(radius - 2,
-                new Color(1f, 1f, 1f, 0.14f), new Color(1f, 1f, 1f, 0.015f),
-                new Color(1f, 1f, 1f, 0.16f), new Color(1f, 1f, 1f, 0.0f), 1.2f);
+                new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.008f),
+                new Color(1f, 1f, 1f, 0.14f), new Color(1f, 1f, 1f, 0.0f), 1.1f);
             sheenImage.type = Image.Type.Sliced;
             sheenImage.raycastTarget = false;
             sheen.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
+            // 对角镜面扫光：visionOS 液态玻璃最关键的一层。
+            var specular = CreateRect(root, "Specular");
+            Stretch(specular, 1.5f);
+            var specularImage = specular.gameObject.AddComponent<Image>();
+            specularImage.sprite = LinearGradientSprite(256,
+                new Color(1f, 1f, 1f, 0.105f), new Color(1f, 1f, 1f, 0f), 135f);
+            specularImage.type = Image.Type.Simple;
+            specularImage.raycastTarget = false;
+            specular.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
             // 底部折射光：模拟玻璃下缘把环境光“兜”回来。
             var refraction = CreateRect(root, "Refraction");
@@ -464,8 +505,8 @@ namespace Qiyu.Quest.UI
                 new Vector2(10f, 6f), new Vector2(-10f, 54f));
             var refractionImage = refraction.gameObject.AddComponent<Image>();
             refractionImage.sprite = RoundedSprite(radius - 8,
-                new Color(1f, 1f, 1f, 0f), new Color(0.62f, 0.74f, 1f, 0.09f),
-                new Color(1f, 1f, 1f, 0f), new Color(0.7f, 0.82f, 1f, 0.16f), 1f);
+                new Color(1f, 1f, 1f, 0f), new Color(0.62f, 0.74f, 1f, 0.05f),
+                new Color(1f, 1f, 1f, 0f), new Color(0.7f, 0.82f, 1f, 0.10f), 1f);
             refractionImage.type = Image.Type.Sliced;
             refractionImage.raycastTarget = false;
             refraction.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
@@ -476,7 +517,7 @@ namespace Qiyu.Quest.UI
                 new Vector2(10f, -128f), new Vector2(430f, -8f));
             var glossImage = gloss.gameObject.AddComponent<Image>();
             glossImage.sprite = RadialSprite(256,
-                new Color(1f, 1f, 1f, 0.16f), new Color(1f, 1f, 1f, 0f));
+                new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0f));
             glossImage.raycastTarget = false;
             gloss.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
@@ -485,7 +526,7 @@ namespace Qiyu.Quest.UI
             Stretch(noise, 1.5f);
             var noiseImage = noise.gameObject.AddComponent<Image>();
             noiseImage.sprite = NoiseSprite();
-            noiseImage.color = new Color(1f, 1f, 1f, 0.018f * alpha);
+            noiseImage.color = new Color(1f, 1f, 1f, 0.010f * alpha);
             noiseImage.type = Image.Type.Tiled;
             noiseImage.raycastTarget = false;
             noise.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
@@ -495,8 +536,8 @@ namespace Qiyu.Quest.UI
 
         /// <summary>带纵向布局的卡片。直接往 card.transform 里加子节点即可。</summary>
         public static Image Card(Transform parent, string name, bool strong = false,
-                                 int radius = RadiusCard, int padding = 28,
-                                 float spacing = Space5)
+                                 int radius = RadiusCard, int padding = 24,
+                                 float spacing = 18f)
         {
             var panel = Panel(parent, name, strong, radius);
             var layout = panel.gameObject.AddComponent<VerticalLayoutGroup>();
@@ -535,7 +576,7 @@ namespace Qiyu.Quest.UI
             var header = CreateRect(parent, "Header");
             Layout(header.gameObject, subtitle == null ? 44f : 66f);
 
-            var titleLabel = Label(header, "Title", title, 27, TextPrimary,
+            var titleLabel = Label(header, "Title", title, 24, TextPrimary,
                 TextAnchor.MiddleLeft, true);
             SetAnchored(titleLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
                 new Vector2(0f, subtitle == null ? 0f : 26f),
@@ -543,7 +584,7 @@ namespace Qiyu.Quest.UI
 
             if (!string.IsNullOrEmpty(subtitle))
             {
-                var subtitleLabel = Label(header, "Subtitle", subtitle, 16, TextTertiary,
+                var subtitleLabel = Label(header, "Subtitle", subtitle, 14, TextTertiary,
                     TextAnchor.LowerLeft);
                 SetAnchored(subtitleLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
                     new Vector2(1f, 0f), new Vector2(trailing == null ? 0f : -200f, -32f));
@@ -551,7 +592,7 @@ namespace Qiyu.Quest.UI
 
             if (!string.IsNullOrEmpty(trailing))
             {
-                var pill = Pill(header, "Trailing", trailing, trailingColor ?? Success, 15);
+                var pill = Pill(header, "Trailing", trailing, trailingColor ?? Success, 13);
                 SetAnchored(pill.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
                     new Vector2(-180f, -16f), new Vector2(0f, 16f));
             }
@@ -612,12 +653,12 @@ namespace Qiyu.Quest.UI
         public static QiyuUIButton Button(Transform parent, string name, string text,
                                           Action onClick,
                                           QiyuButtonVariant variant = QiyuButtonVariant.Glass,
-                                          int fontSize = 21, int height = 60)
+                                          int fontSize = 18, int height = 52)
         {
             var rect = CreateRect(parent, name);
             var rootImage = rect.gameObject.AddComponent<Image>();
             rootImage.color = new Color(1f, 1f, 1f, 0f);
-            rootImage.raycastTarget = false;
+            rootImage.raycastTarget = true;
 
             var (top, bottom, borderTop, borderBottom, textColor) = VariantColors(variant);
             var radius = Mathf.Min(RadiusButton, Mathf.Max(8, height / 2));
@@ -713,7 +754,7 @@ namespace Qiyu.Quest.UI
             var rect = CreateRect(parent, name);
             var rootImage = rect.gameObject.AddComponent<Image>();
             rootImage.color = new Color(1f, 1f, 1f, 0f);
-            rootImage.raycastTarget = false;
+            rootImage.raycastTarget = true;
 
             var background = CreateRect(rect, "Background");
             Stretch(background, 2f);
@@ -726,7 +767,7 @@ namespace Qiyu.Quest.UI
             backgroundImage.raycastTarget = false;
             background.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
-            var label = Label(rect, "Label", text, 20, TextSecondary,
+            var label = Label(rect, "Label", text, 18, TextSecondary,
                 TextAnchor.MiddleCenter, true);
             Stretch(label.rectTransform, 10f, 4f);
             label.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
@@ -750,9 +791,12 @@ namespace Qiyu.Quest.UI
                                           bool initial, Action<bool> onChanged)
         {
             var rect = CreateRect(parent, name);
+            var rootImage = rect.gameObject.AddComponent<Image>();
+            rootImage.color = new Color(1f, 1f, 1f, 0f);
+            rootImage.raycastTarget = true;
             Layout(rect.gameObject, 58f);
 
-            var label = Label(rect, "Label", labelText, 20, TextPrimary,
+            var label = Label(rect, "Label", labelText, 18, TextPrimary,
                 TextAnchor.MiddleLeft);
             SetAnchored(label.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
                 new Vector2(4f, 0f), new Vector2(-108f, 0f));
@@ -789,12 +833,12 @@ namespace Qiyu.Quest.UI
             var rect = CreateRect(parent, name);
             Layout(rect.gameObject, 76f);
 
-            var label = Label(rect, "Label", labelText, 19, TextSecondary,
+            var label = Label(rect, "Label", labelText, 17, TextSecondary,
                 TextAnchor.UpperLeft);
             SetAnchored(label.rectTransform, new Vector2(0f, 0.5f), new Vector2(1f, 1f),
                 new Vector2(4f, 0f), new Vector2(-120f, -2f));
 
-            var value = Label(rect, "Value", "", 19, TextPrimary,
+            var value = Label(rect, "Value", "", 17, TextPrimary,
                 TextAnchor.UpperRight, true);
             SetAnchored(value.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 1f),
                 new Vector2(-120f, 0f), new Vector2(-4f, -2f));
@@ -818,7 +862,7 @@ namespace Qiyu.Quest.UI
                 new Color(1f, 1f, 1f, 0.075f), new Color(1f, 1f, 1f, 0.035f),
                 new Color(1f, 1f, 1f, 0.22f), new Color(1f, 1f, 1f, 0.06f), 1.4f);
             rootImage.type = Image.Type.Sliced;
-            rootImage.raycastTarget = false;
+            rootImage.raycastTarget = true;
             Layout(rect.gameObject, height, height);
 
             var viewport = CreateRect(rect, "TextArea");

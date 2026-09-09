@@ -18,6 +18,7 @@ using UnityEditor.XR.Management;
 using UnityEditor.XR.Management.Metadata;
 using UnityEditor.XR.OpenXR.Features;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
 using UnityEngine.XR.Management;
@@ -328,10 +329,37 @@ namespace Qiyu.Quest.Editor
             // 手部追踪：复用 Meta 官方 OVRHandPrefab，供 UI 用手势（捏合）操作。
             var handPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(
                 "Packages/com.meta.xr.sdk.core/Prefabs/OVRHandPrefab.prefab");
+            var rayHelperPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Packages/com.meta.xr.sdk.core/Prefabs/OVRRayHelper.prefab");
             if (handPrefab != null)
             {
-                AddHandPrefab(handPrefab, leftHandAnchor, "LeftHand", OVRHand.Hand.HandLeft);
-                AddHandPrefab(handPrefab, rightHandAnchor, "RightHand", OVRHand.Hand.HandRight);
+                AddHandPrefab(handPrefab, rayHelperPrefab, leftHandAnchor, "LeftHand",
+                    OVRHand.Hand.HandLeft);
+                AddHandPrefab(handPrefab, rayHelperPrefab, rightHandAnchor, "RightHand",
+                    OVRHand.Hand.HandRight);
+            }
+
+            // 手柄：复用 Meta 官方 OVRControllerPrefab + OVRRayHelper，
+            // 由 OVRInputModule 自动接管激光、hover 和扳机点击。
+            var controllerPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Packages/com.meta.xr.sdk.core/Prefabs/OVRControllerPrefab.prefab");
+            if (controllerPrefab != null)
+            {
+                AddControllerPrefab(controllerPrefab, rayHelperPrefab, leftHandAnchor,
+                    "LeftController", OVRInput.Controller.LTouch);
+                AddControllerPrefab(controllerPrefab, rayHelperPrefab, rightHandAnchor,
+                    "RightController", OVRInput.Controller.RTouch);
+            }
+
+            // Meta 官方 UI 输入模块：统一处理手部捏合与手柄扳机。
+            var eventSystemObject = new GameObject("QiyuEventSystem",
+                typeof(EventSystem), typeof(OVRInputModule));
+            var inputModule = eventSystemObject.GetComponent<OVRInputModule>();
+            if (inputModule != null)
+            {
+                inputModule.rayTransform = centerEye;
+                inputModule.joyPadClickButton = OVRInput.Button.One;
+                inputModule.useRightStickScroll = true;
             }
 
             var runtimeRoot = new GameObject("QiyuP0Runtime");
@@ -385,6 +413,7 @@ namespace Qiyu.Quest.Editor
             runtimeRoot.AddComponent<QuestAvatarModelImporter>();
             var debugPanel = runtimeRoot.AddComponent<QiyuMRApp>();
             runtimeRoot.AddComponent<PassthroughDiagnostics>();
+            runtimeRoot.AddComponent<QiyuInteractionBootstrap>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
             if (string.IsNullOrWhiteSpace(serverUrl))
@@ -433,8 +462,8 @@ namespace Qiyu.Quest.Editor
             Selection.activeGameObject = runtimeRoot;
         }
 
-        private static void AddHandPrefab(GameObject prefab, Transform parent,
-                                          string name, OVRHand.Hand hand)
+        private static void AddHandPrefab(GameObject prefab, GameObject rayHelperPrefab,
+                                          Transform parent, string name, OVRHand.Hand hand)
         {
             if (parent == null)
             {
@@ -457,7 +486,47 @@ namespace Qiyu.Quest.Editor
                 handType.enumValueIndex = (int)hand;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
+            if (rayHelperPrefab != null)
+            {
+                var rayHelperObject = (GameObject)PrefabUtility.InstantiatePrefab(
+                    rayHelperPrefab, instance.transform);
+                rayHelperObject.name = name + "RayHelper";
+                rayHelperObject.transform.localPosition = Vector3.zero;
+                rayHelperObject.transform.localRotation = Quaternion.identity;
+                handComponent.RayHelper = rayHelperObject.GetComponent<OVRRayHelper>();
+            }
             Debug.Log($"[QiyuP0Setup] 已添加手部追踪: {name}");
+        }
+
+        private static void AddControllerPrefab(GameObject prefab, GameObject rayHelperPrefab,
+                                                Transform parent, string name,
+                                                OVRInput.Controller controller)
+        {
+            if (parent == null)
+            {
+                return;
+            }
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
+            instance.name = name;
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            var helper = instance.GetComponent<OVRControllerHelper>();
+            if (helper == null)
+            {
+                Debug.LogWarning($"[QiyuP0Setup] {name} 缺少 OVRControllerHelper 组件");
+                return;
+            }
+            helper.m_controller = controller;
+            if (rayHelperPrefab != null)
+            {
+                var rayHelperObject = (GameObject)PrefabUtility.InstantiatePrefab(
+                    rayHelperPrefab, instance.transform);
+                rayHelperObject.name = name + "RayHelper";
+                rayHelperObject.transform.localPosition = Vector3.zero;
+                rayHelperObject.transform.localRotation = Quaternion.identity;
+                helper.RayHelper = rayHelperObject.GetComponent<OVRRayHelper>();
+            }
+            Debug.Log($"[QiyuP0Setup] 已添加手柄射线: {name} ({controller})");
         }
 
         private static void Wire(UnityEngine.Object target,

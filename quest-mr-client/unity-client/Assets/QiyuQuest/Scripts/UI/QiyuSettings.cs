@@ -2,6 +2,12 @@ using UnityEngine;
 
 namespace Qiyu.Quest.UI
 {
+    public enum QiyuPanelMode
+    {
+        Motion3DoF = 0,
+        Fixed6DoF = 1
+    }
+
     /// <summary>Quest 端设置（PlayerPrefs 持久化）。</summary>
     public static class QiyuSettings
     {
@@ -97,6 +103,12 @@ namespace Qiyu.Quest.UI
             set => Set(Prefix + "panel_distance", Mathf.Clamp(value, 1.2f, 3f));
         }
 
+        public static int PanelMode
+        {
+            get => PlayerPrefs.GetInt(Prefix + "panel_mode", (int)QiyuPanelMode.Fixed6DoF);
+            set => Set(Prefix + "panel_mode", Mathf.Clamp(value, 0, 1));
+        }
+
         public static bool AutoConnect
         {
             get => PlayerPrefs.GetInt(Prefix + "auto_connect", 1) == 1;
@@ -120,6 +132,7 @@ namespace Qiyu.Quest.UI
             PlayerPrefs.DeleteKey(Prefix + "render_scale");
             PlayerPrefs.DeleteKey(Prefix + "low_foveation");
             PlayerPrefs.DeleteKey(Prefix + "panel_distance");
+            PlayerPrefs.DeleteKey(Prefix + "panel_mode");
             PlayerPrefs.DeleteKey(Prefix + "auto_connect");
             PlayerPrefs.Save();
         }

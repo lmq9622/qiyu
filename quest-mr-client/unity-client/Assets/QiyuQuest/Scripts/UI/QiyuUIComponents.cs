@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 namespace Qiyu.Quest.UI
@@ -14,7 +15,9 @@ namespace Qiyu.Quest.UI
     }
 
     /// <summary>液体玻璃按钮：弹性 hover / 按下回弹 / 高光增强。</summary>
-    public class QiyuUIButton : MonoBehaviour, IQiyuUIInteractable
+    public class QiyuUIButton : MonoBehaviour, IQiyuUIInteractable,
+        IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler,
+        IPointerUpHandler, IPointerClickHandler
     {
         private Image _root;
         private Image _body;
@@ -114,10 +117,36 @@ namespace Qiyu.Quest.UI
             _scaleVelocity = 0f;
             QiyuGazeInteractor.HapticPulse();
         }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            SetHover(true);
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            SetHover(false);
+        }
+
+        public void OnPointerDown(PointerEventData eventData)
+        {
+            _scale = 0.965f;
+            _scaleVelocity = 0f;
+        }
+
+        public void OnPointerUp(PointerEventData eventData)
+        {
+        }
+
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            Activate();
+        }
     }
 
     /// <summary>顶部标签页：白色胶囊滑动式激活态。</summary>
-    public class QiyuUITab : MonoBehaviour, IQiyuUIInteractable
+    public class QiyuUITab : MonoBehaviour, IQiyuUIInteractable,
+        IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
     {
         private Image _background;
         private TMP_Text _label;
@@ -199,10 +228,26 @@ namespace Qiyu.Quest.UI
                 Mathf.Infinity, dt);
             transform.localScale = new Vector3(_scale, _scale, 1f);
         }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            SetHover(true);
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            SetHover(false);
+        }
+
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            Activate();
+        }
     }
 
     /// <summary>液体玻璃开关。</summary>
-    public class QiyuUIToggle : MonoBehaviour, IQiyuUIInteractable
+    public class QiyuUIToggle : MonoBehaviour, IQiyuUIInteractable,
+        IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
     {
         private Image _track;
         private Image _knobImage;
@@ -285,10 +330,27 @@ namespace Qiyu.Quest.UI
                     _knobT);
             }
         }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            SetHover(true);
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            SetHover(false);
+        }
+
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            Activate();
+        }
     }
 
     /// <summary>液体玻璃滑杆，支持射线点击与拖动。</summary>
-    public class QiyuUISlider : MonoBehaviour, IQiyuUIInteractable
+    public class QiyuUISlider : MonoBehaviour, IQiyuUIInteractable,
+        IPointerEnterHandler, IPointerExitHandler, IPointerDownHandler,
+        IDragHandler, IPointerUpHandler
     {
         private float _min;
         private float _max;
@@ -321,7 +383,7 @@ namespace Qiyu.Quest.UI
                 new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.05f),
                 new Color(1f, 1f, 1f, 0.16f), new Color(1f, 1f, 1f, 0.05f), 1.2f);
             _track.type = Image.Type.Sliced;
-            _track.raycastTarget = false;
+            _track.raycastTarget = true;
 
             var fillRect = QiyuUI.CreateRect(transform, "Fill");
             QiyuUI.SetAnchored(fillRect, new Vector2(0f, 0f), new Vector2(0f, 1f),
@@ -409,10 +471,60 @@ namespace Qiyu.Quest.UI
                 _knob.anchorMax = new Vector2(_displayT, 0.5f);
             }
         }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            SetHover(true);
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            SetHover(false);
+        }
+
+        public void OnPointerDown(PointerEventData eventData)
+        {
+            SetFromPointer(eventData);
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            SetFromPointer(eventData);
+        }
+
+        public void OnPointerUp(PointerEventData eventData)
+        {
+        }
+
+        private void SetFromPointer(PointerEventData eventData)
+        {
+            Vector3 world;
+            if (eventData is OVRPointerEventData vrData &&
+                vrData.worldSpaceRay.direction.sqrMagnitude > 0.0001f)
+            {
+                var plane = new Plane(Rect.forward, Rect.position);
+                if (!plane.Raycast(vrData.worldSpaceRay, out var enter))
+                {
+                    return;
+                }
+                world = vrData.worldSpaceRay.GetPoint(enter);
+            }
+            else if (eventData.pointerCurrentRaycast.isValid)
+            {
+                world = eventData.pointerCurrentRaycast.worldPosition;
+            }
+            else
+            {
+                return;
+            }
+            var local = Rect.InverseTransformPoint(world);
+            SetFromLocalPoint(local.x, Rect.rect.width);
+        }
     }
 
     /// <summary>输入框包装：点击后弹出 Qiyu 自绘键盘（不依赖 Android 软键盘）。</summary>
-    public class QiyuUIInputField : MonoBehaviour, IQiyuUIInteractable
+    public class QiyuUIInputField : MonoBehaviour, IQiyuUIInteractable,
+        IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
     {
         private TMP_InputField _input;
         private Image _background;
@@ -428,6 +540,9 @@ namespace Qiyu.Quest.UI
             _background = GetComponent<Image>();
             if (_input != null)
             {
+                // 由 Qiyu 自绘键盘负责输入，避免 Quest 系统软键盘与 EventSystem 抢占。
+                _input.interactable = false;
+                _input.enabled = false;
                 _input.shouldHideMobileInput = true;
                 _input.restoreOriginalTextOnEscape = false;
             }
@@ -455,6 +570,71 @@ namespace Qiyu.Quest.UI
             }
             QiyuVirtualKeyboard.Show(_input, _placeholder);
             QiyuGazeInteractor.HapticPulse();
+        }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            SetHover(true);
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            SetHover(false);
+        }
+
+        public void OnPointerClick(PointerEventData eventData)
+        {
+            Activate();
+        }
+    }
+
+    /// <summary>窗口顶部拖动条：6DoF 固定模式下把面板拖到空间中任意位置。</summary>
+    public class QiyuPanelDragHandle : MonoBehaviour, IPointerEnterHandler,
+        IPointerExitHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
+    {
+        private QiyuMRApp _app;
+        private Image _image;
+
+        public void Initialize(QiyuMRApp app)
+        {
+            _app = app;
+            _image = GetComponent<Image>();
+            if (_image != null)
+            {
+                _image.raycastTarget = true;
+                _image.color = new Color(1f, 1f, 1f, 0.88f);
+            }
+        }
+
+        public void OnPointerEnter(PointerEventData eventData)
+        {
+            if (_image != null)
+            {
+                _image.color = Color.white;
+            }
+        }
+
+        public void OnPointerExit(PointerEventData eventData)
+        {
+            if (_image != null)
+            {
+                _image.color = new Color(1f, 1f, 1f, 0.88f);
+            }
+        }
+
+        public void OnBeginDrag(PointerEventData eventData)
+        {
+            _app?.BeginPanelDrag(eventData);
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            _app?.DragPanel(eventData);
+        }
+
+        public void OnEndDrag(PointerEventData eventData)
+        {
+            _app?.EndPanelDrag(eventData);
         }
     }
 
