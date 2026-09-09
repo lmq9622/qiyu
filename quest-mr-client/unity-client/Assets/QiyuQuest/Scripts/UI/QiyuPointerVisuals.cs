@@ -219,6 +219,18 @@ namespace Qiyu.Quest.UI
 
         private void LogDiagnostics()
         {
+            try
+            {
+                LogDiagnosticsInternal();
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning("[QiyuPointer] 诊断日志异常: " + e.Message);
+            }
+        }
+
+        private void LogDiagnosticsInternal()
+        {
             var builder = new StringBuilder();
             builder.Append("[QiyuPointer] ");
             builder.Append("eventSystem=").Append(EventSystem.current != null);
