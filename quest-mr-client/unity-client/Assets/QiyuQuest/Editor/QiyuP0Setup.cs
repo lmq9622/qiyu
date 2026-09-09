@@ -6,6 +6,7 @@ using Meta.XR.BuildingBlocks.AIBlocks;
 using Meta.XR.EnvironmentDepth;
 using Meta.XR.MRUtilityKit;
 using Qiyu.Quest.Avatar;
+using Qiyu.Quest.Behavior;
 using Qiyu.Quest.Networking;
 using Qiyu.Quest.Perception;
 using Qiyu.Quest.Spatial;
@@ -18,6 +19,7 @@ using UnityEditor.XR.Management;
 using UnityEditor.XR.Management.Metadata;
 using UnityEditor.XR.OpenXR.Features;
 using UnityEngine;
+using UnityEngine.AI;
 using UnityEngine.EventSystems;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
@@ -431,6 +433,22 @@ namespace Qiyu.Quest.Editor
 
             // P3：AvatarIntent 路由（Avatar 骨骼/驱动后续挂到场景角色上）
             var avatarRouter = runtimeRoot.AddComponent<AvatarIntentRouter>();
+            var avatarObject = new GameObject("QiyuAvatar");
+            avatarObject.transform.SetParent(runtimeRoot.transform, false);
+            avatarObject.AddComponent<NavMeshAgent>();
+            avatarObject.AddComponent<CharacterLocomotionController>();
+            avatarObject.AddComponent<AvatarLookController>();
+            avatarObject.AddComponent<BlendShapeAvatarDriver>();
+            avatarObject.AddComponent<MotionLibrary>();
+            avatarObject.AddComponent<ProceduralMotionFallback>();
+            avatarObject.AddComponent<CharacterAnimationController>();
+            avatarObject.AddComponent<CharacterAttentionController>();
+
+            var behaviorWorld = runtimeRoot.AddComponent<CharacterWorldModel>();
+            var behaviorState = runtimeRoot.AddComponent<CharacterStateStore>();
+            var behaviorPolicy = runtimeRoot.AddComponent<TinyBehaviorPolicy>();
+            var reflexLayer = runtimeRoot.AddComponent<CharacterReflexLayer>();
+            var behaviorRuntime = runtimeRoot.AddComponent<CharacterBehaviorRuntime>();
 
             // P4：Passthrough Camera + 深度 + 物体投影
             var cameraAccess = runtimeRoot.AddComponent<PassthroughCameraAccess>();
@@ -481,10 +499,32 @@ namespace Qiyu.Quest.Editor
             Wire(voiceLoop, ("webSocketClient", client), ("microphone", microphone),
                 ("ttsPlayer", ttsPlayer));
             Wire(avatarRouter, ("webSocketClient", client), ("ttsPlayer", ttsPlayer));
+            Wire(avatarRouter, ("behaviorRuntime", behaviorRuntime));
             Wire(frameSource, ("webSocketClient", client), ("cameraAccess", cameraAccess));
             Wire(projector, ("webSocketClient", client), ("cameraAccess", cameraAccess),
                 ("depthAccess", depthAccess), ("sceneSummary", summary),
                 ("worldStatePublisher", publisher));
+            Wire(publisher, ("webSocketClient", client), ("sceneSummary", summary),
+                ("navMeshBuilder", navMeshBuilder), ("avatarRoot", avatarObject.transform),
+                ("microphone", microphone), ("ttsPlayer", ttsPlayer));
+            Wire(behaviorRuntime,
+                ("webSocketClient", client),
+                ("worldStatePublisher", publisher),
+                ("worldModel", behaviorWorld),
+                ("stateStore", behaviorState),
+                ("behaviorPolicy", behaviorPolicy),
+                ("reflexLayer", reflexLayer),
+                ("locomotion", avatarObject.GetComponent<CharacterLocomotionController>()),
+                ("attention", avatarObject.GetComponent<CharacterAttentionController>()),
+                ("animationController", avatarObject.GetComponent<CharacterAnimationController>()),
+                ("microphone", microphone),
+                ("ttsPlayer", ttsPlayer),
+                ("avatarRoot", avatarObject.transform),
+                ("userHead", centerEye));
+            Wire(avatarObject.GetComponent<CharacterAnimationController>(),
+                ("motionLibrary", avatarObject.GetComponent<MotionLibrary>()),
+                ("proceduralFallback", avatarObject.GetComponent<ProceduralMotionFallback>()),
+                ("expressionDriver", avatarObject.GetComponent<BlendShapeAvatarDriver>()));
             Wire(reconstruction, ("sceneSummary", summary), ("effectMesh", effectMesh),
                 ("depthAccess", depthAccess), ("cameraAccess", cameraAccess));
             Wire(debugPanel,
@@ -542,6 +582,13 @@ namespace Qiyu.Quest.Editor
                 rayHelperObject.transform.localPosition = Vector3.zero;
                 rayHelperObject.transform.localRotation = Quaternion.identity;
                 handComponent.RayHelper = rayHelperObject.GetComponent<OVRRayHelper>();
+            }
+            // 官方 OVRHandPrefab 默认关闭了骨架描边；打开后手部会有清晰的关节/轮廓线。
+            var skeletonRenderer = instance.GetComponentInChildren<OVRSkeletonRenderer>(true);
+            if (skeletonRenderer != null)
+            {
+                skeletonRenderer.enabled = true;
+                Debug.Log($"[QiyuP0Setup] 已开启手部骨架描边: {name}");
             }
             Debug.Log($"[QiyuP0Setup] 已添加手部追踪: {name}");
         }

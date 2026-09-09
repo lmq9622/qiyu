@@ -558,13 +558,27 @@ namespace Qiyu.Quest.UI
             var body = CreateRect(root, "Body");
             Stretch(body);
             var bodyImage = body.gameObject.AddComponent<Image>();
+            // 白色卡片主体先用已验证稳定的圆角 Sprite，磨砂噪点单独叠层，
+            // 避免毛玻璃 Sprite 本身出问题时整张卡片消失。
             bodyImage.sprite = light
-                ? FrostedSprite(radius, top, bottom, LightBorderTop, LightBorderBottom,
-                    1.6f, 0.05f)
+                ? RoundedSprite(radius, top, bottom, LightBorderTop, LightBorderBottom, 1.6f)
                 : RoundedSprite(radius, top, bottom, BorderTop, BorderBottom, 1.6f);
             bodyImage.type = Image.Type.Sliced;
             bodyImage.raycastTarget = false;
             body.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
+            if (light)
+            {
+                var frost = CreateRect(root, "Frost");
+                Stretch(frost, 1.5f);
+                var frostImage = frost.gameObject.AddComponent<Image>();
+                frostImage.sprite = FrostedSprite(radius - 2,
+                    new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.04f),
+                    new Color(1f, 1f, 1f, 0f), new Color(1f, 1f, 1f, 0f), 0f, 0.08f);
+                frostImage.type = Image.Type.Sliced;
+                frostImage.raycastTarget = false;
+                frost.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+            }
 
             // 顶部内侧高光：让玻璃看起来有“上边缘厚度”。
             var sheen = CreateRect(root, "Sheen");

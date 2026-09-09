@@ -128,6 +128,23 @@ namespace Qiyu.Quest.UI
             microphone?.SetVadThreshold(QiyuSettings.VadThreshold);
             microphone?.SetGain(QiyuSettings.MicGain);
             Debug.Log("[QiyuMRApp] UI 初始化完成");
+            var firstCard = _content != null && _content.childCount > 0
+                ? _content.GetChild(0)
+                : null;
+            var cardRect = firstCard as RectTransform;
+            var cardBody = firstCard != null
+                ? firstCard.Find("Body")?.GetComponent<Image>()
+                : null;
+            var firstLabel = firstCard != null
+                ? firstCard.GetComponentInChildren<TMP_Text>()
+                : null;
+            Debug.Log($"[QiyuUIDiag] canvasPos={_canvasRect.position} " +
+                      $"canvasRot={_canvasRect.rotation.eulerAngles} " +
+                      $"canvasScale={_canvasRect.lossyScale} " +
+                      $"card={firstCard?.name} cardSize={cardRect?.rect.size} " +
+                      $"bodySprite={cardBody?.sprite?.name} bodyColor={cardBody?.color} " +
+                      $"label={firstLabel?.text} labelColor={firstLabel?.color} " +
+                      $"labelSize={firstLabel?.rectTransform.rect.size}");
         }
 
         private void OnDestroy()
@@ -280,10 +297,18 @@ namespace Qiyu.Quest.UI
             if (room != null)
             {
                 var bounds = room.GetRoomBounds();
-                bounds.Expand(-0.25f);
-                if (!bounds.Contains(position))
+                var size = bounds.size;
+                if (size.x > 0.5f && size.y > 0.5f && size.z > 0.5f)
                 {
-                    position = bounds.ClosestPoint(position);
+                    bounds.Expand(-0.25f);
+                    if (!bounds.Contains(position))
+                    {
+                        var clamped = bounds.ClosestPoint(position);
+                        if (Vector3.Distance(clamped, position) < 3f)
+                        {
+                            position = clamped;
+                        }
+                    }
                 }
             }
         }
@@ -680,10 +705,18 @@ namespace Qiyu.Quest.UI
             if (room != null)
             {
                 var bounds = room.GetRoomBounds();
-                bounds.Expand(-0.2f);
-                if (!bounds.Contains(newPosition))
+                var size = bounds.size;
+                if (size.x > 0.5f && size.y > 0.5f && size.z > 0.5f)
                 {
-                    newPosition = bounds.ClosestPoint(newPosition);
+                    bounds.Expand(-0.2f);
+                    if (!bounds.Contains(newPosition))
+                    {
+                        var clamped = bounds.ClosestPoint(newPosition);
+                        if (Vector3.Distance(clamped, newPosition) < 3f)
+                        {
+                            newPosition = clamped;
+                        }
+                    }
                 }
             }
             _canvasRect.position = newPosition;

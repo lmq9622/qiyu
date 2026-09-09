@@ -217,7 +217,8 @@ namespace Qiyu.Quest.UI
             var skeleton = hand.GetComponentInChildren<OVRSkeleton>(true);
             if (skeleton == null || skeleton.Bones == null || skeleton.Bones.Count == 0)
             {
-                return false;
+                ApplyPointerCorrection(hand, ref origin, ref direction);
+                return true;
             }
             Transform distal = null;
             Transform tip = null;
@@ -240,7 +241,8 @@ namespace Qiyu.Quest.UI
             }
             if (tip == null)
             {
-                return false;
+                ApplyPointerCorrection(hand, ref origin, ref direction);
+                return true;
             }
             origin = tip.position;
             if (distal != null)
@@ -252,7 +254,21 @@ namespace Qiyu.Quest.UI
                     return true;
                 }
             }
-            return false;
+            ApplyPointerCorrection(hand, ref origin, ref direction);
+            return true;
+        }
+
+        /// <summary>
+        /// 低置信度时 OVRSkeleton 可能没有骨骼，此时 PointerPose 会指向手背斜上方。
+        /// 这里把射线向前推一点并向下修正，视觉上落到食指方向。
+        /// </summary>
+        private static void ApplyPointerCorrection(OVRHand hand, ref Vector3 origin,
+                                                   ref Vector3 direction)
+        {
+            origin = hand.PointerPose.position + hand.PointerPose.forward * 0.02f;
+            direction = Quaternion.AngleAxis(22f, hand.PointerPose.right) *
+                        hand.PointerPose.forward;
+            direction.Normalize();
         }
 
         private void UpdateHandInteraction(PointerVisual visual, RaycastResult hitResult,
@@ -391,6 +407,14 @@ namespace Qiyu.Quest.UI
                     .Append(" pos=").Append(hand.PointerPose.position.ToString("F2"))
                     .Append(" ray=").Append(hand.RayHelper != null)
                     .Append(']');
+                var skeleton = hand.GetComponentInChildren<OVRSkeleton>(true);
+                builder.Append(" skel=").Append(skeleton != null)
+                    .Append(" bones=").Append(skeleton?.Bones?.Count ?? -1);
+                if (TryGetHandRay(hand, out var origin, out var direction))
+                {
+                    builder.Append(" origin=").Append(origin.ToString("F2"))
+                        .Append(" dir=").Append(direction.ToString("F2"));
+                }
             }
             builder.Append(" controllers=");
             var controllers = FindObjectsByType<OVRControllerHelper>(
