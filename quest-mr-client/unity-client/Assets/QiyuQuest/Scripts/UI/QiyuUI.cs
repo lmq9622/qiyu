@@ -29,16 +29,16 @@ namespace Qiyu.Quest.UI
         // ---------------- 颜色 ----------------
         public static readonly Color BgBase = Hex("#08080B");
         public static readonly Color Surface = Hex("#15151A");
-        public static readonly Color GlassTop = new Color(0.145f, 0.152f, 0.190f, 0.58f);
-        public static readonly Color GlassBottom = new Color(0.070f, 0.075f, 0.095f, 0.50f);
-        public static readonly Color GlassStrongTop = new Color(0.195f, 0.205f, 0.250f, 0.72f);
-        public static readonly Color GlassStrongBottom = new Color(0.090f, 0.095f, 0.120f, 0.66f);
-        public static readonly Color BorderTop = new Color(1f, 1f, 1f, 0.17f);
+        public static readonly Color GlassTop = new Color(0.075f, 0.090f, 0.150f, 0.66f);
+        public static readonly Color GlassBottom = new Color(0.035f, 0.045f, 0.085f, 0.62f);
+        public static readonly Color GlassStrongTop = new Color(0.105f, 0.130f, 0.210f, 0.80f);
+        public static readonly Color GlassStrongBottom = new Color(0.045f, 0.055f, 0.105f, 0.78f);
+        public static readonly Color BorderTop = new Color(1f, 1f, 1f, 0.20f);
         public static readonly Color BorderBottom = new Color(1f, 1f, 1f, 0.045f);
         public static readonly Color Border = new Color(1f, 1f, 1f, 0.12f);
-        public static readonly Color TextPrimary = Hex("#F5F5F7");
-        public static readonly Color TextSecondary = Hex("#A7A7B0");
-        public static readonly Color TextTertiary = Hex("#6E6E78");
+        public static readonly Color TextPrimary = Hex("#FFFFFF");
+        public static readonly Color TextSecondary = Hex("#C7C7CC");
+        public static readonly Color TextTertiary = Hex("#8E8E93");
         public static readonly Color Success = Hex("#30D158");
         public static readonly Color Warning = Hex("#FFD60A");
         public static readonly Color Danger = Hex("#FF453A");
@@ -62,7 +62,7 @@ namespace Qiyu.Quest.UI
         public const int RadiusInput = 18;
 
         /// <summary>兼容旧调用；TMP SDF 不再需要字号补偿。</summary>
-        public static float FontScale = 1f;
+        public static float FontScale = 1.15f;
 
         private const int Supersample = 4;
         private const float BasePixelsPerUnit = 100f;
@@ -494,7 +494,7 @@ namespace Qiyu.Quest.UI
             Stretch(specular, 1.5f);
             var specularImage = specular.gameObject.AddComponent<Image>();
             specularImage.sprite = LinearGradientSprite(256,
-                new Color(1f, 1f, 1f, 0.105f), new Color(1f, 1f, 1f, 0f), 135f);
+                new Color(0.35f, 0.65f, 1f, 0.11f), new Color(1f, 1f, 1f, 0f), 135f);
             specularImage.type = Image.Type.Simple;
             specularImage.raycastTarget = false;
             specular.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;

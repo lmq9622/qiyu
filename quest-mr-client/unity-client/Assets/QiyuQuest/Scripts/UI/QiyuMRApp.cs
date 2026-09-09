@@ -43,7 +43,7 @@ namespace Qiyu.Quest.UI
 
         private const float CanvasWidth = 1680f;
         private const float CanvasHeight = 1050f;
-        private const float Outer = 24f;
+        private const float Outer = 32f;
         private const float TopBarHeight = 88f;
         private const float TabBarHeight = 68f;
         private const float BottomBarHeight = 52f;
@@ -68,7 +68,6 @@ namespace Qiyu.Quest.UI
 
         private TMP_Text _connText;
         private Image _connDot;
-        private TMP_Text _sessionText;
         private TMP_Text _bottomStatus;
         private TMP_Text _homeMruk;
         private TMP_Text _homeReply;
@@ -286,19 +285,18 @@ namespace Qiyu.Quest.UI
                     ? (handshake ? QiyuUI.Success : QiyuUI.Warning)
                     : QiyuUI.Danger;
             }
-            if (_sessionText != null)
-            {
-                var session = webSocketClient != null ? webSocketClient.SessionId : "";
-                _sessionText.text = string.IsNullOrEmpty(session)
-                    ? "session: -"
-                    : $"session: {session.Substring(0, Mathf.Min(8, session.Length))}…";
-            }
             if (_bottomStatus != null)
             {
                 var mic = microphone != null && microphone.IsCapturing ? "麦克风开" : "麦克风关";
                 var tts = ttsPlayer != null && ttsPlayer.IsPlaying ? "TTS 播放中" : "TTS 空闲";
-                _bottomStatus.text = $"{mic}   ·   {tts}   ·   {_smoothedFps:F0} FPS   ·   " +
-                                     $"最近事件：{(_lastEvent.Length > 0 ? _lastEvent : "无")}";
+                var session = webSocketClient != null ? webSocketClient.SessionId : "";
+                var shortSession = string.IsNullOrEmpty(session)
+                    ? "-"
+                    : session.Substring(0, Mathf.Min(8, session.Length));
+                _bottomStatus.text =
+                    $"{mic}   ·   {tts}   ·   {_smoothedFps:F0} FPS   ·   " +
+                    $"session {shortSession}   ·   " +
+                    $"最近事件：{(_lastEvent.Length > 0 ? _lastEvent : "无")}";
             }
         }
 
@@ -411,11 +409,6 @@ namespace Qiyu.Quest.UI
                 QiyuUI.TextTertiary, TextAnchor.LowerLeft);
             QiyuUI.SetAnchored(subtitle.rectTransform, new Vector2(0f, 0f),
                 new Vector2(0.45f, 1f), new Vector2(74f, 6f), new Vector2(0f, -46f));
-
-            _sessionText = QiyuUI.Label(top, "Session", "session: -", 15,
-                QiyuUI.TextTertiary, TextAnchor.MiddleRight, false, false);
-            QiyuUI.SetAnchored(_sessionText.rectTransform, new Vector2(0.28f, 0f),
-                new Vector2(0.55f, 1f), Vector2.zero, Vector2.zero);
 
             var chip = QiyuUI.Panel(top, "ConnChip", false, 16);
             QiyuUI.SetAnchored(chip.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),

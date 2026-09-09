@@ -414,6 +414,7 @@ namespace Qiyu.Quest.Editor
             var debugPanel = runtimeRoot.AddComponent<QiyuMRApp>();
             runtimeRoot.AddComponent<PassthroughDiagnostics>();
             runtimeRoot.AddComponent<QiyuInteractionBootstrap>();
+            runtimeRoot.AddComponent<QiyuPointerVisuals>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
             if (string.IsNullOrWhiteSpace(serverUrl))

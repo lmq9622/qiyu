@@ -87,7 +87,7 @@ namespace Qiyu.Quest.UI
 
         public static float RenderScale
         {
-            get => PlayerPrefs.GetFloat(Prefix + "render_scale", 1.15f);
+            get => PlayerPrefs.GetFloat(Prefix + "render_scale", 1.25f);
             set => Set(Prefix + "render_scale", Mathf.Clamp(value, 1f, 1.4f));
         }
 
@@ -99,7 +99,7 @@ namespace Qiyu.Quest.UI
 
         public static float PanelDistance
         {
-            get => PlayerPrefs.GetFloat(Prefix + "panel_distance", 1.95f);
+            get => PlayerPrefs.GetFloat(Prefix + "panel_distance", 1.7f);
             set => Set(Prefix + "panel_distance", Mathf.Clamp(value, 1.2f, 3f));
         }
 

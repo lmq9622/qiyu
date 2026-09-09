@@ -1,0 +1,266 @@
+using System.Collections.Generic;
+using System.Text;
+using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.UI;
+
+namespace Qiyu.Quest.UI
+{
+    /// <summary>
+    /// 手部/手柄可见激光与指针点。
+    ///
+    /// 点击链路仍然走 Meta 官方 OVRInputModule + OVRRaycaster；
+    /// 这个组件只负责“看得见的激光 + 命中点 + 诊断日志”，
+    /// 避免官方 OVRRayHelper 在输入源切换时留下卡死的蓝色网格。
+    /// </summary>
+    public class QiyuPointerVisuals : MonoBehaviour
+    {
+        private sealed class PointerVisual
+        {
+            public OVRHand Hand;
+            public OVRControllerHelper Controller;
+            public Transform Source;
+            public LineRenderer Line;
+            public Transform Dot;
+            public Renderer DotRenderer;
+        }
+
+        [SerializeField] private float maxDistance = 6f;
+        [SerializeField] private Color rayColor = new Color(0.42f, 0.84f, 1f, 0.85f);
+        [SerializeField] private Color activeColor = new Color(1f, 1f, 1f, 0.95f);
+        [SerializeField] private bool logDiagnostics = true;
+
+        private readonly List<PointerVisual> _visuals = new List<PointerVisual>();
+        private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>();
+        private Canvas _canvas;
+        private OVRPointerEventData _eventData;
+        private Material _rayMaterial;
+        private Material _activeMaterial;
+        private Material _dotMaterial;
+        private float _nextDiagnosticsAt;
+
+        private void Start()
+        {
+            _canvas = FindFirstObjectByType<Canvas>();
+            CreateMaterials();
+            foreach (var hand in FindObjectsByType<OVRHand>(FindObjectsInactive.Include))
+            {
+                if (hand != null)
+                {
+                    _visuals.Add(CreateVisual(hand.transform, hand, null));
+                }
+            }
+            foreach (var controller in FindObjectsByType<OVRControllerHelper>(
+                         FindObjectsInactive.Include))
+            {
+                if (controller != null)
+                {
+                    _visuals.Add(CreateVisual(controller.transform, null, controller));
+                }
+            }
+            Debug.Log($"[QiyuPointer] 初始化完成 hands/controllers={_visuals.Count}");
+        }
+
+        private void Update()
+        {
+            if (EventSystem.current == null)
+            {
+                return;
+            }
+            if (_eventData == null)
+            {
+                _eventData = new OVRPointerEventData(EventSystem.current);
+            }
+
+            foreach (var visual in _visuals)
+            {
+                UpdateVisual(visual);
+            }
+
+            if (logDiagnostics && Time.unscaledTime >= _nextDiagnosticsAt)
+            {
+                _nextDiagnosticsAt = Time.unscaledTime + 2f;
+                LogDiagnostics();
+            }
+        }
+
+        private PointerVisual CreateVisual(Transform source, OVRHand hand,
+                                           OVRControllerHelper controller)
+        {
+            var visual = new PointerVisual
+            {
+                Hand = hand,
+                Controller = controller,
+                Source = source
+            };
+
+            var lineObject = new GameObject(source.name + "QiyuLaser");
+            lineObject.transform.SetParent(transform, false);
+            visual.Line = lineObject.AddComponent<LineRenderer>();
+            visual.Line.positionCount = 2;
+            visual.Line.startWidth = 0.0075f;
+            visual.Line.endWidth = 0.0025f;
+            visual.Line.numCapVertices = 4;
+            visual.Line.useWorldSpace = true;
+            visual.Line.sharedMaterial = _rayMaterial;
+            visual.Line.startColor = rayColor;
+            visual.Line.endColor = new Color(rayColor.r, rayColor.g, rayColor.b, 0.10f);
+            visual.Line.enabled = false;
+
+            var dot = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            dot.name = source.name + "QiyuDot";
+            dot.transform.SetParent(transform, false);
+            dot.transform.localScale = Vector3.one * 0.014f;
+            Destroy(dot.GetComponent<Collider>());
+            visual.Dot = dot.transform;
+            visual.DotRenderer = dot.GetComponent<Renderer>();
+            if (visual.DotRenderer != null)
+            {
+                visual.DotRenderer.sharedMaterial = _dotMaterial;
+            }
+            visual.Dot.gameObject.SetActive(false);
+            return visual;
+        }
+
+        private void UpdateVisual(PointerVisual visual)
+        {
+            if (visual?.Source == null)
+            {
+                return;
+            }
+            var active = IsSourceActive(visual);
+            if (!active)
+            {
+                visual.Line.enabled = false;
+                visual.Dot.gameObject.SetActive(false);
+                return;
+            }
+
+            var origin = visual.Source.position;
+            var direction = visual.Source.forward;
+            var end = origin + direction * maxDistance;
+            var hit = false;
+
+            _eventData.Reset();
+            _eventData.worldSpaceRay = new Ray(origin, direction);
+            _eventData.button = PointerEventData.InputButton.Left;
+            _raycastResults.Clear();
+            EventSystem.current.RaycastAll(_eventData, _raycastResults);
+            for (var i = 0; i < _raycastResults.Count; i++)
+            {
+                var result = _raycastResults[i];
+                if (!result.isValid || result.gameObject == null)
+                {
+                    continue;
+                }
+                end = result.worldPosition;
+                hit = true;
+                break;
+            }
+
+            visual.Line.enabled = true;
+            visual.Line.sharedMaterial = hit ? _activeMaterial : _rayMaterial;
+            visual.Line.SetPosition(0, origin);
+            visual.Line.SetPosition(1, end);
+            visual.Dot.gameObject.SetActive(true);
+            visual.Dot.position = end;
+            if (visual.DotRenderer != null)
+            {
+                visual.DotRenderer.sharedMaterial = hit ? _activeMaterial : _dotMaterial;
+            }
+        }
+
+        private static bool IsSourceActive(PointerVisual visual)
+        {
+            if (visual.Hand != null)
+            {
+                return visual.Hand.IsTracked && visual.Hand.IsPointerPoseValid;
+            }
+            return visual.Controller != null && visual.Controller.IsActive();
+        }
+
+        private void CreateMaterials()
+        {
+            var shader = Shader.Find("Universal Render Pipeline/Unlit")
+                         ?? Shader.Find("Sprites/Default")
+                         ?? Shader.Find("Unlit/Color");
+            _rayMaterial = CreateMaterial(shader, "QiyuLaserRay", rayColor);
+            _activeMaterial = CreateMaterial(shader, "QiyuLaserActive", activeColor);
+            _dotMaterial = CreateMaterial(shader, "QiyuLaserDot",
+                new Color(0.55f, 0.90f, 1f, 0.95f));
+        }
+
+        private static Material CreateMaterial(Shader shader, string name, Color color)
+        {
+            var material = new Material(shader) { name = name };
+            if (material.HasProperty("_BaseColor"))
+            {
+                material.SetColor("_BaseColor", color);
+            }
+            if (material.HasProperty("_Color"))
+            {
+                material.SetColor("_Color", color);
+            }
+            if (material.HasProperty("_Surface"))
+            {
+                material.SetFloat("_Surface", 1f);
+            }
+            if (material.HasProperty("_Blend"))
+            {
+                material.SetFloat("_Blend", 0f);
+            }
+            if (material.HasProperty("_ZWrite"))
+            {
+                material.SetFloat("_ZWrite", 0f);
+            }
+            material.renderQueue = 3000;
+            return material;
+        }
+
+        private void LogDiagnostics()
+        {
+            var builder = new StringBuilder();
+            builder.Append("[QiyuPointer] ");
+            builder.Append("eventSystem=").Append(EventSystem.current != null);
+            builder.Append(" module=").Append(OVRInputModule.instance != null);
+            builder.Append(" handTracking=").Append(OVRPlugin.GetHandTrackingEnabled());
+            builder.Append(" hands=");
+            var hands = FindObjectsByType<OVRHand>(FindObjectsInactive.Include);
+            foreach (var hand in hands)
+            {
+                if (hand == null)
+                {
+                    continue;
+                }
+                builder.Append('[').Append(hand.name)
+                    .Append(" tracked=").Append(hand.IsTracked)
+                    .Append(" pointer=").Append(hand.IsPointerPoseValid)
+                    .Append(" data=").Append(hand.IsDataValid)
+                    .Append(" conf=").Append(hand.HandConfidence)
+                    .Append(" ray=").Append(hand.RayHelper != null)
+                    .Append(']');
+            }
+            builder.Append(" controllers=");
+            var controllers = FindObjectsByType<OVRControllerHelper>(
+                FindObjectsInactive.Include);
+            foreach (var controller in controllers)
+            {
+                if (controller == null)
+                {
+                    continue;
+                }
+                builder.Append('[').Append(controller.name)
+                    .Append(' ').Append(controller.m_controller)
+                    .Append(" active=").Append(controller.IsActive())
+                    .Append(" ray=").Append(controller.RayHelper != null)
+                    .Append(']');
+            }
+            if (_canvas != null)
+            {
+                builder.Append(" raycastables=")
+                    .Append(GraphicRegistry.GetRaycastableGraphicsForCanvas(_canvas).Count);
+            }
+            Debug.Log(builder.ToString());
+        }
+    }
+}

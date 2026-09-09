@@ -39,6 +39,19 @@ namespace Qiyu.Quest.UI
                 }
                 helper.NormalMaterial = normal;
                 helper.PinchMaterial = selected;
+                // 官方 OVRRayHelper 的网格在输入源切换时会留下卡死的蓝条；
+                // 可见激光改由 QiyuPointerVisuals 统一绘制。
+                if (helper.Renderer != null)
+                {
+                    helper.Renderer.enabled = false;
+                }
+                if (helper.Cursor != null)
+                {
+                    foreach (var cursorRenderer in helper.Cursor.GetComponentsInChildren<Renderer>(true))
+                    {
+                        cursorRenderer.enabled = false;
+                    }
+                }
             }
             Debug.Log($"[QiyuInteraction] 已替换 {helpers.Length} 个激光材质为 URP Unlit");
         }

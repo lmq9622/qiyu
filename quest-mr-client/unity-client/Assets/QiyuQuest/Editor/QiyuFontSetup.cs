@@ -32,9 +32,10 @@ namespace Qiyu.Quest.Editor
             "https://raw.githubusercontent.com/notofonts/noto-cjk/main/" +
             "Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf";
 
-        private const int SamplingPointSize = 64;
-        private const int AtlasPadding = 6;
-        private const int AtlasSize = 1024;
+        // 80pt + 8px padding + 2048 图集：小字号下 SDF 边缘更干净。
+        private const int SamplingPointSize = 80;
+        private const int AtlasPadding = 8;
+        private const int AtlasSize = 2048;
 
         [MenuItem("Qiyu/Ensure Chinese SDF Font")]
         public static void EnsureFontAssetsMenu()
