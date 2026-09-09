@@ -868,7 +868,7 @@ namespace Qiyu.Quest.UI
             var recon = QiyuUI.Card(_content, "Reconstruction", true,
                 QiyuUI.RadiusCard, 32, 18);
             QiyuUI.CardHeader(recon.transform, "空间重建",
-                "MRUK 房间几何 + 语义锚点 + 环境深度点云", "实时", QiyuUI.Success);
+                "MRUK 语义锚点（扫描时静态） + 深度点云（实时）", "实时", QiyuUI.Success);
             QiyuUI.Toggle(recon.transform, "RoomMesh", "显示房间网格（EffectMesh）",
                 spatialReconstruction != null && spatialReconstruction.ShowRoomMesh, value =>
                 {
@@ -1007,6 +1007,7 @@ namespace Qiyu.Quest.UI
                         $"深度 {(spatialReconstruction.DepthAvailable ? "已接收" : "等待中")}   ·   " +
                         $"帧 {spatialReconstruction.DepthFrameCount}   ·   " +
                         $"点云 {spatialReconstruction.PointCount} 点\n" +
+                        $"{spatialReconstruction.DepthStatus}\n" +
                         $"语义物体 {spatialReconstruction.SemanticObjectCount} 个" +
                         "（桌子 / 床 / 储物 / 门窗框等）";
                 }
@@ -1198,7 +1199,7 @@ namespace Qiyu.Quest.UI
                     Recenter();
                 }, "m");
             QiyuUI.Slider(render.transform, "FollowSmooth", "3DoF 跟随平滑（越大越拖尾）",
-                0.05f, 0.5f, QiyuSettings.FollowSmoothTime,
+                0.05f, 0.8f, QiyuSettings.FollowSmoothTime,
                 value => QiyuSettings.FollowSmoothTime = value, "s");
 
             var conversation = QiyuUI.Card(_content, "Conversation", false,

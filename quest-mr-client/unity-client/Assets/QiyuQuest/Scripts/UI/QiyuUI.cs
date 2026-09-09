@@ -565,6 +565,12 @@ namespace Qiyu.Quest.UI
             layout.childForceExpandHeight = false;
             var fitter = panel.gameObject.AddComponent<ContentSizeFitter>();
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            // 强制卡片宽度跟随 ScrollView 视口，避免长文本把卡片撑出屏幕左右两侧。
+            var layoutElement = panel.gameObject.AddComponent<LayoutElement>();
+            layoutElement.flexibleWidth = 1f;
+            layoutElement.minWidth = 0f;
+            layoutElement.preferredWidth = -1f;
             return panel;
         }
 

@@ -106,8 +106,8 @@ namespace Qiyu.Quest.UI
         /// <summary>3DoF 跟随的平滑时间；越大越拖尾，越小越跟手。</summary>
         public static float FollowSmoothTime
         {
-            get => PlayerPrefs.GetFloat(Prefix + "follow_smooth", 0.2f);
-            set => Set(Prefix + "follow_smooth", Mathf.Clamp(value, 0.05f, 0.5f));
+            get => PlayerPrefs.GetFloat(Prefix + "follow_smooth", 0.35f);
+            set => Set(Prefix + "follow_smooth", Mathf.Clamp(value, 0.05f, 0.8f));
         }
 
         public static int PanelMode

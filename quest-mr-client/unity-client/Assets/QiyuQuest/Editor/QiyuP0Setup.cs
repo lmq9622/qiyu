@@ -204,6 +204,13 @@ namespace Qiyu.Quest.Editor
                 "com.meta.openxr.feature.input.metaquestplus.detached",
                 // 裸手：aim/pinch 交互 profile。
                 "com.unity.openxr.feature.input.handinteraction",
+                // AR Foundation / Meta OpenXR 子系统：Environment Depth、Scene Mesh、Plane。
+                "com.unity.openxr.feature.arfoundation-meta-session",
+                "com.unity.openxr.feature.arfoundation-meta-occlusion",
+                "com.unity.openxr.feature.arfoundation-meta-mesh",
+                "com.unity.openxr.feature.arfoundation-meta-plane",
+                "com.unity.openxr.feature.arfoundation-meta-anchor",
+                "com.unity.openxr.feature.arfoundation-meta-bounding-boxes",
             })
             {
                 var feature = FeatureHelpers.GetFeatureWithIdForBuildTarget(
@@ -449,6 +456,7 @@ namespace Qiyu.Quest.Editor
             runtimeRoot.AddComponent<PassthroughDiagnostics>();
             runtimeRoot.AddComponent<QiyuInteractionBootstrap>();
             runtimeRoot.AddComponent<QiyuPointerVisuals>();
+            runtimeRoot.AddComponent<QiyuHaptics>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
             if (string.IsNullOrWhiteSpace(serverUrl))

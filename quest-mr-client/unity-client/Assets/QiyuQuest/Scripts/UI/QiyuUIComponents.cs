@@ -680,15 +680,7 @@ namespace Qiyu.Quest.UI
 
         public static void HapticPulse()
         {
-            try
-            {
-                OVRInput.SetControllerVibration(0.18f, 0.35f, OVRInput.Controller.RTouch);
-                OVRInput.SetControllerVibration(0.18f, 0.35f, OVRInput.Controller.LTouch);
-            }
-            catch
-            {
-                // 手柄不可用时忽略。
-            }
+            QiyuHaptics.Pulse();
         }
 
         private void Start()

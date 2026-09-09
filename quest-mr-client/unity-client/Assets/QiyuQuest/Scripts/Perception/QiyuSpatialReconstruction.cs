@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Meta.XR;
 using Meta.XR.BuildingBlocks.AIBlocks;
+using Meta.XR.EnvironmentDepth;
 using Meta.XR.MRUtilityKit;
 using Unity.Collections;
 using UnityEngine;
@@ -30,7 +31,7 @@ namespace Qiyu.Quest.Perception
         [SerializeField] private bool showAnchors = true;
         [SerializeField] private bool showDepthCloud = false;
         [SerializeField] private int depthSampleStep = 10;
-        [SerializeField] private float depthPointSize = 0.008f;
+        [SerializeField] private float depthPointSize = 0.015f;
         [SerializeField] private float depthMaxDistance = 8f;
 
         private readonly List<GameObject> _anchorVisuals = new List<GameObject>();
@@ -40,12 +41,14 @@ namespace Qiyu.Quest.Perception
         private Transform _cameraTransform;
         private Mesh _quadMesh;
         private Material _pointMaterial;
+        private Material _roomMaterial;
         private Matrix4x4[] _pointMatrices;
         private int _pointCount;
         private float _nextDepthBuildAt;
         private float _nextDepthRequestAt;
         private int _depthFrameCount;
         private bool _depthAvailable;
+        private EnvironmentDepthManager _environmentDepth;
 
         public bool ShowRoomMesh
         {
@@ -82,6 +85,19 @@ namespace Qiyu.Quest.Perception
         public int PointCount => _pointCount;
         public bool DepthAvailable => _depthAvailable;
         public int DepthFrameCount => _depthFrameCount;
+        public string DepthStatus
+        {
+            get
+            {
+                if (_environmentDepth == null)
+                {
+                    return "未挂接";
+                }
+                return $"supported={EnvironmentDepthManager.IsSupported} " +
+                       $"available={_environmentDepth.IsDepthAvailable} " +
+                       $"frames={_depthFrameCount}";
+            }
+        }
 
         private void Awake()
         {
@@ -108,6 +124,7 @@ namespace Qiyu.Quest.Perception
         {
             var centerEye = GameObject.Find("CenterEyeAnchor");
             _cameraTransform = centerEye != null ? centerEye.transform : Camera.main?.transform;
+            _environmentDepth = FindFirstObjectByType<EnvironmentDepthManager>();
             if (sceneSummary != null && sceneSummary.CurrentRoom != null)
             {
                 RebuildAnchors(sceneSummary.CurrentRoom);
@@ -153,9 +170,17 @@ namespace Qiyu.Quest.Perception
         {
             if (effectMesh != null)
             {
+                if (!effectMesh.gameObject.activeSelf)
+                {
+                    effectMesh.gameObject.SetActive(true);
+                }
                 effectMesh.HideMesh = !showRoomMesh;
-                effectMesh.ToggleEffectMeshVisibility(showRoomMesh, default,
-                    GetMaterial(new Color(0.20f, 0.72f, 1f)));
+                if (effectMesh.EffectMeshObjects.Count == 0 && MRUK.Instance != null &&
+                    MRUK.Instance.Rooms.Count > 0)
+                {
+                    effectMesh.CreateMesh();
+                }
+                effectMesh.ToggleEffectMeshVisibility(showRoomMesh, default, _roomMaterial);
             }
             foreach (var visual in _anchorVisuals)
             {
@@ -164,6 +189,10 @@ namespace Qiyu.Quest.Perception
                     visual.SetActive(showAnchors);
                 }
             }
+            Debug.Log($"[QiyuReconstruction] roomMesh={showRoomMesh} " +
+                      $"effectMeshes={effectMesh?.EffectMeshObjects.Count ?? 0} " +
+                      $"anchors={showAnchors}({AnchorCount}) depthCloud={showDepthCloud} " +
+                      $"depth={DepthStatus}");
         }
 
         private void RebuildAnchors(MRUKRoom room)
@@ -358,11 +387,13 @@ namespace Qiyu.Quest.Perception
                          ?? Shader.Find("Unlit/Color")
                          ?? Shader.Find("Sprites/Default");
             _pointMaterial = CreateMaterial(shader, "QiyuDepthPoint",
-                new Color(0.35f, 0.95f, 1f, 0.72f));
+                new Color(0.35f, 0.95f, 1f, 0.88f));
             if (_pointMaterial != null)
             {
                 _pointMaterial.enableInstancing = true;
             }
+            _roomMaterial = CreateMaterial(shader, "QiyuRoomMesh",
+                new Color(0.20f, 0.72f, 1f, 0.32f));
         }
 
         private static Mesh _cubeMesh;

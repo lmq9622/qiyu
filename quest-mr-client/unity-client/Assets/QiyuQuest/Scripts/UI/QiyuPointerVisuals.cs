@@ -144,8 +144,7 @@ namespace Qiyu.Quest.UI
                 return;
             }
 
-            var origin = visual.Source.position;
-            var direction = visual.Source.forward;
+            GetPointerRay(visual, out var origin, out var direction);
             var end = origin + direction * maxDistance;
             var hit = false;
             RaycastResult hitResult = default;
@@ -193,6 +192,67 @@ namespace Qiyu.Quest.UI
                 return visual.Hand.IsPointerPoseValid || visual.Hand.IsDataValid;
             }
             return visual.Controller != null && visual.Controller.IsActive();
+        }
+
+        private static void GetPointerRay(PointerVisual visual, out Vector3 origin,
+                                          out Vector3 direction)
+        {
+            if (visual.Hand != null && TryGetHandRay(visual.Hand, out origin, out direction))
+            {
+                return;
+            }
+            origin = visual.Source.position;
+            direction = visual.Source.forward;
+        }
+
+        /// <summary>
+        /// 裸手射线不再用 OVRHand.PointerPose（捏合时会斜向上），
+        /// 改成食指指节 → 食指指尖的方向，激光顺着手指走。
+        /// </summary>
+        private static bool TryGetHandRay(OVRHand hand, out Vector3 origin,
+                                          out Vector3 direction)
+        {
+            origin = hand.PointerPose.position;
+            direction = hand.PointerPose.forward;
+            var skeleton = hand.GetComponentInChildren<OVRSkeleton>(true);
+            if (skeleton == null || skeleton.Bones == null || skeleton.Bones.Count == 0)
+            {
+                return false;
+            }
+            Transform distal = null;
+            Transform tip = null;
+            foreach (var bone in skeleton.Bones)
+            {
+                if (bone?.Transform == null)
+                {
+                    continue;
+                }
+                if (bone.Id == OVRSkeleton.BoneId.Hand_Index1 ||
+                    bone.Id == OVRSkeleton.BoneId.XRHand_IndexProximal)
+                {
+                    distal = bone.Transform;
+                }
+                else if (bone.Id == OVRSkeleton.BoneId.Hand_IndexTip ||
+                         bone.Id == OVRSkeleton.BoneId.XRHand_IndexTip)
+                {
+                    tip = bone.Transform;
+                }
+            }
+            if (tip == null)
+            {
+                return false;
+            }
+            origin = tip.position;
+            if (distal != null)
+            {
+                var fingerDirection = tip.position - distal.position;
+                if (fingerDirection.sqrMagnitude > 0.000001f)
+                {
+                    direction = fingerDirection.normalized;
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void UpdateHandInteraction(PointerVisual visual, RaycastResult hitResult,
