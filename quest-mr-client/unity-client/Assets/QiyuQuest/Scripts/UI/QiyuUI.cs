@@ -480,12 +480,9 @@ namespace Qiyu.Quest.UI
             bodyImage.type = Image.Type.Sliced;
             bodyImage.raycastTarget = false;
             body.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
-            // 所有内部高光/扫光/噪点都裁进圆角 Body，避免右上/右下出现方形边缘。
-            var bodyMask = body.gameObject.AddComponent<Mask>();
-            bodyMask.showMaskGraphic = true;
 
             // 顶部内侧高光：让玻璃看起来有“上边缘厚度”。
-            var sheen = CreateRect(body, "Sheen");
+            var sheen = CreateRect(root, "Sheen");
             Stretch(sheen, 2f);
             var sheenImage = sheen.gameObject.AddComponent<Image>();
             sheenImage.sprite = RoundedSprite(radius - 2,
@@ -495,29 +492,20 @@ namespace Qiyu.Quest.UI
             sheenImage.raycastTarget = false;
             sheen.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
-            // 对角镜面扫光：visionOS 液态玻璃最关键的一层。
-            var specular = CreateRect(body, "Specular");
-            Stretch(specular, 1.5f);
-            var specularImage = specular.gameObject.AddComponent<Image>();
-            specularImage.sprite = LinearGradientSprite(256,
-                new Color(0.35f, 0.65f, 1f, 0.11f), new Color(1f, 1f, 1f, 0f), 135f);
-            specularImage.type = Image.Type.Simple;
-            specularImage.raycastTarget = false;
-            specular.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
-
-            // 明艳的蓝紫色彩洗：让玻璃不再是灰黑块。
-            var wash = CreateRect(body, "ColorWash");
+            // 蓝紫色彩洗：用圆角 Sprite，不再用方形贴图，避免破坏圆角。
+            var wash = CreateRect(root, "ColorWash");
             Stretch(wash, 1.5f);
             var washImage = wash.gameObject.AddComponent<Image>();
-            washImage.sprite = LinearGradientSprite(256,
-                new Color(0.10f, 0.55f, 1f, 0.13f),
-                new Color(0.65f, 0.25f, 1f, 0.08f), 135f);
-            washImage.type = Image.Type.Simple;
+            washImage.sprite = RoundedSprite(radius - 2,
+                new Color(0.10f, 0.55f, 1f, 0.12f),
+                new Color(0.65f, 0.25f, 1f, 0.07f),
+                new Color(1f, 1f, 1f, 0f), new Color(1f, 1f, 1f, 0f), 1f);
+            washImage.type = Image.Type.Sliced;
             washImage.raycastTarget = false;
             wash.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
             // 底部折射光：模拟玻璃下缘把环境光“兜”回来。
-            var refraction = CreateRect(body, "Refraction");
+            var refraction = CreateRect(root, "Refraction");
             SetAnchored(refraction, new Vector2(0f, 0f), new Vector2(1f, 0f),
                 new Vector2(10f, 6f), new Vector2(-10f, 54f));
             var refractionImage = refraction.gameObject.AddComponent<Image>();
@@ -529,7 +517,7 @@ namespace Qiyu.Quest.UI
             refraction.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
             // 左上角果冻高光。
-            var gloss = CreateRect(body, "Gloss");
+            var gloss = CreateRect(root, "Gloss");
             SetAnchored(gloss, new Vector2(0f, 1f), new Vector2(0f, 1f),
                 new Vector2(10f, -128f), new Vector2(430f, -8f));
             var glossImage = gloss.gameObject.AddComponent<Image>();
@@ -537,16 +525,6 @@ namespace Qiyu.Quest.UI
                 new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0f));
             glossImage.raycastTarget = false;
             gloss.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
-
-            // 磨砂颗粒。
-            var noise = CreateRect(body, "Noise");
-            Stretch(noise, 1.5f);
-            var noiseImage = noise.gameObject.AddComponent<Image>();
-            noiseImage.sprite = NoiseSprite();
-            noiseImage.color = new Color(1f, 1f, 1f, 0.010f * alpha);
-            noiseImage.type = Image.Type.Tiled;
-            noiseImage.raycastTarget = false;
-            noise.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
             return rootImage;
         }
@@ -561,17 +539,10 @@ namespace Qiyu.Quest.UI
             layout.spacing = spacing;
             layout.padding = new RectOffset(padding, padding, padding, padding);
             layout.childControlWidth = true;
-            layout.childControlHeight = false;
+            layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
-            var fitter = panel.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
-            // 强制卡片宽度跟随 ScrollView 视口，避免长文本把卡片撑出屏幕左右两侧。
-            var layoutElement = panel.gameObject.AddComponent<LayoutElement>();
-            layoutElement.flexibleWidth = 1f;
-            layoutElement.minWidth = 0f;
-            layoutElement.preferredWidth = -1f;
+            layout.childAlignment = TextAnchor.UpperCenter;
             return panel;
         }
 
@@ -597,13 +568,21 @@ namespace Qiyu.Quest.UI
                                                Color? trailingColor = null)
         {
             var header = CreateRect(parent, "Header");
-            Layout(header.gameObject, subtitle == null ? 44f : 76f);
+            var headerLayout = header.gameObject.AddComponent<HorizontalLayoutGroup>();
+            headerLayout.spacing = 10f;
+            headerLayout.childControlWidth = true;
+            headerLayout.childControlHeight = true;
+            headerLayout.childForceExpandWidth = false;
+            headerLayout.childForceExpandHeight = true;
+            headerLayout.childAlignment = TextAnchor.MiddleLeft;
+            Layout(header.gameObject, subtitle == null ? 44f : 74f);
 
-            // 左侧彩色 accent bar：让每个卡片有明确色相，不再是灰块。
+            // 左侧彩色 accent bar
             var accent = CreateRect(header, "Accent");
-            SetAnchored(accent, new Vector2(0f, 0f), new Vector2(0f, 1f),
-                new Vector2(0f, subtitle == null ? 7f : 36f),
-                new Vector2(5f, -7f));
+            var accentLayout = Layout(accent.gameObject, subtitle == null ? 32f : 48f);
+            accentLayout.minWidth = 5f;
+            accentLayout.preferredWidth = 5f;
+            accentLayout.flexibleWidth = 0f;
             var accentImage = accent.gameObject.AddComponent<Image>();
             var accentColor = trailingColor ?? Accent;
             accentImage.sprite = RoundedSprite(3,
@@ -612,25 +591,39 @@ namespace Qiyu.Quest.UI
             accentImage.type = Image.Type.Sliced;
             accentImage.raycastTarget = false;
 
-            var titleLabel = Label(header, "Title", title, 24, TextPrimary,
-                TextAnchor.MiddleLeft, true);
-            SetAnchored(titleLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
-                new Vector2(18f, subtitle == null ? 0f : 40f),
-                new Vector2(trailing == null ? 0f : -200f, 0f));
+            // 标题/副标题放进垂直布局，避免手工锚点重叠和超框。
+            var column = CreateRect(header, "TextColumn");
+            var columnLayout = column.gameObject.AddComponent<VerticalLayoutGroup>();
+            columnLayout.spacing = 2f;
+            columnLayout.childControlWidth = true;
+            columnLayout.childControlHeight = true;
+            columnLayout.childForceExpandWidth = true;
+            columnLayout.childForceExpandHeight = false;
+            columnLayout.childAlignment = TextAnchor.MiddleLeft;
+            var columnElement = column.gameObject.AddComponent<LayoutElement>();
+            columnElement.flexibleWidth = 1f;
+            columnElement.minWidth = 0f;
 
+            var titleLabel = Label(column, "Title", title, 24, TextPrimary,
+                TextAnchor.MiddleLeft, true);
+            Layout(titleLabel.gameObject, 32f);
             if (!string.IsNullOrEmpty(subtitle))
             {
-                var subtitleLabel = Label(header, "Subtitle", subtitle, 14, TextTertiary,
-                    TextAnchor.LowerLeft);
-                SetAnchored(subtitleLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
-                    new Vector2(19f, 0f), new Vector2(trailing == null ? 0f : -200f, -38f));
+                var subtitleLabel = Label(column, "Subtitle", subtitle, 14, TextTertiary,
+                    TextAnchor.MiddleLeft);
+                Layout(subtitleLabel.gameObject, 22f);
             }
 
             if (!string.IsNullOrEmpty(trailing))
             {
                 var pill = Pill(header, "Trailing", trailing, trailingColor ?? Success, 13);
-                SetAnchored(pill.rectTransform, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
-                    new Vector2(-180f, -16f), new Vector2(0f, 16f));
+                var pillLayout = pill.GetComponent<LayoutElement>();
+                if (pillLayout != null)
+                {
+                    pillLayout.minWidth = 110f;
+                    pillLayout.preferredWidth = 140f;
+                    pillLayout.flexibleWidth = 0f;
+                }
             }
             return header;
         }
@@ -670,7 +663,7 @@ namespace Qiyu.Quest.UI
             dotImage.raycastTarget = false;
             accentDot.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
-            var valueLabel = Label(chip.rectTransform, "Value", value, 30, TextPrimary,
+            var valueLabel = Label(chip.rectTransform, "Value", value, 26, TextPrimary,
                 TextAnchor.UpperLeft, true);
             SetAnchored(valueLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
                 new Vector2(42f, 34f), new Vector2(-16f, -18f));
@@ -697,7 +690,10 @@ namespace Qiyu.Quest.UI
             rootImage.raycastTarget = true;
 
             var (top, bottom, borderTop, borderBottom, textColor) = VariantColors(variant);
-            var radius = Mathf.Min(RadiusButton, Mathf.Max(8, height / 2));
+            var effectiveHeight = !string.IsNullOrEmpty(text) && text.Contains("\n")
+                ? height + 16
+                : height;
+            var radius = Mathf.Min(RadiusButton, Mathf.Max(8, effectiveHeight / 2));
 
             // 阴影 + 挤出厚度（3D 果冻的关键：底部先垫一层更深的实体）。
             var shadow = CreateRect(rect, "Shadow");
@@ -742,12 +738,15 @@ namespace Qiyu.Quest.UI
 
             var label = Label(rect, "Label", text, fontSize, textColor,
                 TextAnchor.MiddleCenter, true);
+            label.textWrappingMode = TextWrappingModes.NoWrap;
+            label.overflowMode = TextOverflowModes.Overflow;
             Stretch(label.rectTransform, 24f, 6f);
             label.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
+            Layout(rect.gameObject, effectiveHeight, effectiveHeight);
             var button = rect.gameObject.AddComponent<QiyuUIButton>();
             button.Configure(rootImage, bodyImage, extrusionImage, glossImage, label, onClick,
-                height);
+                effectiveHeight);
             return button;
         }
 

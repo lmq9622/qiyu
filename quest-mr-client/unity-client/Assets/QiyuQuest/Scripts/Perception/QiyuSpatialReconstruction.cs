@@ -46,6 +46,7 @@ namespace Qiyu.Quest.Perception
         private int _pointCount;
         private float _nextDepthBuildAt;
         private float _nextDepthRequestAt;
+        private float _nextPointLogAt;
         private int _depthFrameCount;
         private bool _depthAvailable;
         private EnvironmentDepthManager _environmentDepth;
@@ -344,6 +345,12 @@ namespace Qiyu.Quest.Perception
             var step = Mathf.Clamp(depthSampleStep, 2, 32);
             var count = 0;
             var maxPoints = _pointMatrices.Length;
+            var cameraPosition = _cameraTransform != null
+                ? _cameraTransform.position
+                : frame.CameraPose.position;
+            var firstWorld = Vector3.zero;
+            var firstDepth = 0f;
+            var hasFirst = false;
             for (var y = 0; y < texSize && count < maxPoints; y += step)
             {
                 for (var x = 0; x < texSize && count < maxPoints; x += step)
@@ -364,9 +371,12 @@ namespace Qiyu.Quest.Perception
                     var ray = cameraAccess.ViewportPointToRay(new Vector2(u, v),
                         frame.CameraPose);
                     var world = ray.origin + ray.direction * depth;
-                    var cameraPosition = _cameraTransform != null
-                        ? _cameraTransform.position
-                        : frame.CameraPose.position;
+                    if (!hasFirst)
+                    {
+                        firstWorld = world;
+                        firstDepth = depth;
+                        hasFirst = true;
+                    }
                     // 让 quad 正面朝向相机，否则会被背面剔除掉。
                     var rotation = Quaternion.LookRotation(cameraPosition - world);
                     _pointMatrices[count++] = Matrix4x4.TRS(world, rotation,
@@ -374,6 +384,12 @@ namespace Qiyu.Quest.Perception
                 }
             }
             _pointCount = count;
+            if (hasFirst && Time.unscaledTime >= _nextPointLogAt)
+            {
+                _nextPointLogAt = Time.unscaledTime + 2f;
+                Debug.Log($"[QiyuReconstruction] pointSample world={firstWorld} " +
+                          $"camera={cameraPosition} d={firstDepth:F2} count={count}");
+            }
         }
 
         private void CreatePointResources()
@@ -397,8 +413,9 @@ namespace Qiyu.Quest.Perception
             var shader = Shader.Find("Universal Render Pipeline/Unlit")
                          ?? Shader.Find("Unlit/Color")
                          ?? Shader.Find("Sprites/Default");
+            // 点云先用不透明亮青色，确保一定可见；确认可见后再考虑透明混合。
             _pointMaterial = CreateMaterial(shader, "QiyuDepthPoint",
-                new Color(0.35f, 0.95f, 1f, 0.88f));
+                new Color(0.35f, 0.95f, 1f, 1f), false);
             if (_pointMaterial != null)
             {
                 _pointMaterial.enableInstancing = true;
@@ -451,7 +468,8 @@ namespace Qiyu.Quest.Perception
             return material;
         }
 
-        private static Material CreateMaterial(Shader shader, string name, Color color)
+        private static Material CreateMaterial(Shader shader, string name, Color color,
+                                               bool transparent = true)
         {
             if (shader == null)
             {
@@ -468,7 +486,7 @@ namespace Qiyu.Quest.Perception
             }
             if (material.HasProperty("_Surface"))
             {
-                material.SetFloat("_Surface", 1f);
+                material.SetFloat("_Surface", transparent ? 1f : 0f);
             }
             if (material.HasProperty("_Blend"))
             {
@@ -476,17 +494,32 @@ namespace Qiyu.Quest.Perception
             }
             if (material.HasProperty("_ZWrite"))
             {
-                material.SetFloat("_ZWrite", 0f);
+                material.SetFloat("_ZWrite", transparent ? 0f : 1f);
             }
-            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
-            material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
-            material.SetOverrideTag("RenderType", "Transparent");
-            material.SetInt("_SrcBlend",
-                (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-            material.SetInt("_DstBlend",
-                (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-            material.SetInt("_ZWrite", 0);
-            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+            if (transparent)
+            {
+                material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                material.EnableKeyword("_ALPHAPREMULTIPLY_ON");
+                material.SetOverrideTag("RenderType", "Transparent");
+                material.SetInt("_SrcBlend",
+                    (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                material.SetInt("_DstBlend",
+                    (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                material.SetInt("_ZWrite", 0);
+                material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+            }
+            else
+            {
+                material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                material.SetOverrideTag("RenderType", "Opaque");
+                material.SetInt("_SrcBlend",
+                    (int)UnityEngine.Rendering.BlendMode.One);
+                material.SetInt("_DstBlend",
+                    (int)UnityEngine.Rendering.BlendMode.Zero);
+                material.SetInt("_ZWrite", 1);
+                material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
+            }
             return material;
         }
 

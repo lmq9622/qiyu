@@ -68,6 +68,7 @@ namespace Qiyu.Quest.UI
         private Vector3 _dragPlaneNormal;
         private Vector3 _panelFollowVelocity;
         private bool _panelPoseInitialized;
+        private readonly RaycastHit[] _roomHits = new RaycastHit[32];
 
         private TMP_Text _connText;
         private Image _connDot;
@@ -266,11 +267,80 @@ namespace Qiyu.Quest.UI
                 forward = Vector3.forward;
             }
             forward.Normalize();
-            var distanceValue = Mathf.Clamp(QiyuSettings.PanelDistance, 1.2f, 3.0f);
-            position = followTarget.position + forward * distanceValue +
+            var desiredDistance = Mathf.Clamp(QiyuSettings.PanelDistance, 1.2f, 3.0f);
+            var resolvedDistance = ResolvePanelDistance(followTarget.position, forward,
+                desiredDistance);
+            position = followTarget.position + forward * resolvedDistance +
                        Vector3.up * -0.06f;
             // Canvas 正面朝 -Z；+Z 指向用户前方，用户看到的是正面。
             rotation = Quaternion.LookRotation(forward, Vector3.up);
+        }
+
+        /// <summary>
+        /// 用 MRUK EffectMesh 的碰撞体做 9 点采样，保证整个面板都在墙/家具外侧。
+        /// </summary>
+        private float ResolvePanelDistance(Vector3 head, Vector3 forward, float desired)
+        {
+            if (!QiyuSettings.PanelAvoidance || desired <= 0.1f)
+            {
+                return desired;
+            }
+            var resolved = desired;
+            var playerRoot = followTarget != null ? followTarget.root : null;
+            var halfWidth = CanvasWidth * panelScale * 0.5f;
+            var halfHeight = CanvasHeight * panelScale * 0.5f;
+            var right = Vector3.Cross(Vector3.up, forward).normalized;
+            var up = Vector3.up;
+            var samples = new[]
+            {
+                forward * desired,
+                forward * desired + right * halfWidth,
+                forward * desired - right * halfWidth,
+                forward * desired + up * halfHeight,
+                forward * desired - up * halfHeight,
+                forward * desired + right * halfWidth + up * halfHeight,
+                forward * desired - right * halfWidth + up * halfHeight,
+                forward * desired + right * halfWidth - up * halfHeight,
+                forward * desired - right * halfWidth - up * halfHeight,
+            };
+            foreach (var sample in samples)
+            {
+                var target = head + sample;
+                var direction = (target - head).normalized;
+                var distance = Vector3.Distance(head, target);
+                if (TryGetRoomHit(head, direction, distance, playerRoot, out var hit))
+                {
+                    resolved = Mathf.Min(resolved, hit.distance - 0.25f);
+                }
+            }
+            return Mathf.Clamp(resolved, 0.7f, desired);
+        }
+
+        private bool TryGetRoomHit(Vector3 origin, Vector3 direction, float maxDistance,
+                                   Transform playerRoot, out RaycastHit best)
+        {
+            best = default;
+            var count = Physics.RaycastNonAlloc(origin, direction, _roomHits,
+                maxDistance + 0.5f, ~0, QueryTriggerInteraction.Ignore);
+            var bestDistance = float.MaxValue;
+            for (var i = 0; i < count; i++)
+            {
+                var hit = _roomHits[i];
+                if (hit.collider == null || hit.collider.isTrigger)
+                {
+                    continue;
+                }
+                if (playerRoot != null && hit.collider.transform.root == playerRoot)
+                {
+                    continue;
+                }
+                if (hit.distance < bestDistance)
+                {
+                    bestDistance = hit.distance;
+                    best = hit;
+                }
+            }
+            return bestDistance < float.MaxValue;
         }
 
         private void ScrollWithThumbstick()
@@ -572,13 +642,29 @@ namespace Qiyu.Quest.UI
                 var head = followTarget.position;
                 var toPanel = newPosition - head;
                 var distance = toPanel.magnitude;
-                if (distance < 0.6f)
+                if (QiyuSettings.PanelAvoidance && distance > 0.01f)
+                {
+                    var direction = toPanel.normalized;
+                    var resolved = ResolvePanelDistance(head, direction, distance);
+                    newPosition = head + direction * resolved;
+                }
+                else if (distance < 0.6f)
                 {
                     newPosition = head + toPanel.normalized * 0.6f;
                 }
                 else if (distance > 5f)
                 {
                     newPosition = head + toPanel.normalized * 5f;
+                }
+            }
+            var room = sceneSummary != null ? sceneSummary.CurrentRoom : null;
+            if (room != null)
+            {
+                var bounds = room.GetRoomBounds();
+                bounds.Expand(-0.2f);
+                if (!bounds.Contains(newPosition))
+                {
+                    newPosition = bounds.ClosestPoint(newPosition);
                 }
             }
             _canvasRect.position = newPosition;
@@ -1201,6 +1287,12 @@ namespace Qiyu.Quest.UI
             QiyuUI.Slider(render.transform, "FollowSmooth", "3DoF 跟随平滑（越大越拖尾）",
                 0.05f, 0.8f, QiyuSettings.FollowSmoothTime,
                 value => QiyuSettings.FollowSmoothTime = value, "s");
+            QiyuUI.Toggle(render.transform, "PanelAvoidance", "面板避障（不穿墙/家具）",
+                QiyuSettings.PanelAvoidance, value =>
+                {
+                    QiyuSettings.PanelAvoidance = value;
+                    Recenter();
+                });
 
             var conversation = QiyuUI.Card(_content, "Conversation", false,
                 QiyuUI.RadiusCard, 32, 18);

@@ -116,6 +116,12 @@ namespace Qiyu.Quest.UI
             set => Set(Prefix + "panel_mode", Mathf.Clamp(value, 0, 1));
         }
 
+        public static bool PanelAvoidance
+        {
+            get => PlayerPrefs.GetInt(Prefix + "panel_avoidance", 1) == 1;
+            set => Set(Prefix + "panel_avoidance", value ? 1 : 0);
+        }
+
         public static bool AutoConnect
         {
             get => PlayerPrefs.GetInt(Prefix + "auto_connect", 1) == 1;
@@ -141,6 +147,7 @@ namespace Qiyu.Quest.UI
             PlayerPrefs.DeleteKey(Prefix + "panel_distance");
             PlayerPrefs.DeleteKey(Prefix + "follow_smooth");
             PlayerPrefs.DeleteKey(Prefix + "panel_mode");
+            PlayerPrefs.DeleteKey(Prefix + "panel_avoidance");
             PlayerPrefs.DeleteKey(Prefix + "auto_connect");
             PlayerPrefs.Save();
         }
