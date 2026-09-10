@@ -159,7 +159,7 @@ interrupt       emotion_shift  two_targets  target_missing network_stale
 |---|---|---|
 | Eye Tracking | **不支持** | Quest 3S 硬件无眼动，代码如实返回 `eyeSupported=False`，不伪造注视 |
 | Body Tracking | **不支持** | Quest 3S 无全身追踪，`bodySupported=False`；仅头部+双手 |
-| Passthrough Depth | 部分可用 | `depth=supported=True available=True frames=0 points=0`，深度帧始终为 0，物体 3D 投影仍不可用（TODO） |
+| Passthrough Depth | 部分可用 | `depth=supported=True available=True frames=0 points=0`；真机已定位到根因：`xrAcquireEnvironmentDepthImageMETA failed with XR_ERROR_LIMIT_REACHED`（同一渲染帧内已被 MRUK/其他系统抢先获取深度图），需改为复用 MRUK 暴露的深度纹理而不是自己再取一次（TODO） |
 | 动作资产 | **缺失** | `缺少动作资产 Idle_Relaxed / Reflex_Dodge`，当前使用程序化低精度兜底 |
 | 云侧 LLM | 曾 502 | x99 `192.168.2.6:8081` 一度返回 502，期间角色靠本地策略继续运行；后已恢复 200 |
 
@@ -273,7 +273,9 @@ APK：`D:\UnityProjects\QiyuQuestProject\Builds\QiyuQuestP0.apk`（构建于 202
 1. **动作资产**：`Idle_Relaxed`、`Reflex_Dodge` 等槽位为空，当前是程序化兜底，
    最终自然度必须导入授权 Walk/Run/Idle/手势动作后才能定稿。
 2. **大房间复测**：本房间自由地面约 1 m²，行走/接近/跟随/避障**尚未真机验证**。
-3. **Passthrough Depth**：`frames=0`，物体 3D 投影链路未打通。
+3. **Passthrough Depth**：`frames=0`；真机报 `xrAcquireEnvironmentDepthImageMETA`
+   `XR_ERROR_LIMIT_REACHED`，说明同一渲染帧内深度图已被抢先获取，
+   应改为复用 MRUK 的深度纹理，物体 3D 投影链路才算打通。
 4. **打断响应率**：0.663，需真机复测本地硬约束的实际效果。
 5. **真人动捕长时录制**：需要用户佩戴头显并做动作，用于增量训练/偏好校正。
 6. **Eye/Body Tracking**：Quest 3S 硬件不支持，代码已如实降级，不伪装。
