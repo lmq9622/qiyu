@@ -221,13 +221,19 @@ namespace Qiyu.Quest.UI
             content.anchorMin = new Vector2(0f, 1f);
             content.anchorMax = new Vector2(1f, 1f);
             content.pivot = new Vector2(0.5f, 1f);
+            // 新建 RectTransform 的默认 sizeDelta 是 (100,100)。这里锚点是左右拉伸，
+            // 不清零就会让内容比视口宽 100px，卡片圆角被 Viewport 的 Mask 直接切掉。
+            content.sizeDelta = Vector2.zero;
             content.anchoredPosition = Vector2.zero;
             var layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
             layout.spacing = spacing;
             // 左右留 20px：避免卡片圆角/阴影正好贴在 ScrollRect Mask 边缘被裁掉。
             layout.padding = new RectOffset(20, 20, 4, 24);
             layout.childControlWidth = true;
-            layout.childControlHeight = false;
+            // 必须为 true：childControlHeight=false 时纵向布局用子级当前 sizeDelta 堆叠，
+            // 而卡片高度是同一帧稍后才由 ContentSizeFitter 算出来的，
+            // 结果就是所有卡片都按默认 100px 高叠在一起（文字互相覆盖、白块盖住一切）。
+            layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
             var fitter = content.gameObject.AddComponent<ContentSizeFitter>();
@@ -564,19 +570,19 @@ namespace Qiyu.Quest.UI
             {
                 // 白色磨砂玻璃叠加层：即使这层出问题，下面的深色卡片仍在。
                 var whiteTint = CreateRect(root, "WhiteTint");
-                Stretch(whiteTint, 1.5f);
+                Stretch(whiteTint);
                 var whiteTintImage = whiteTint.gameObject.AddComponent<Image>();
-                whiteTintImage.sprite = RoundedSprite(radius - 2,
-                    new Color(1f, 1f, 1f, 0.90f),
-                    new Color(0.93f, 0.95f, 1f, 0.80f),
+                whiteTintImage.sprite = RoundedSprite(radius,
                     new Color(1f, 1f, 1f, 0.96f),
-                    new Color(0.62f, 0.66f, 0.76f, 0.45f), 1.3f);
+                    new Color(0.90f, 0.93f, 1f, 0.88f),
+                    new Color(1f, 1f, 1f, 0.99f),
+                    new Color(0.55f, 0.60f, 0.70f, 0.55f), 1.6f);
                 whiteTintImage.type = Image.Type.Sliced;
                 whiteTintImage.raycastTarget = false;
                 whiteTint.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
                 var frost = CreateRect(root, "Frost");
-                Stretch(frost, 1.5f);
+                Stretch(frost);
                 var frostImage = frost.gameObject.AddComponent<Image>();
                 frostImage.sprite = FrostedSprite(radius - 2,
                     new Color(1f, 1f, 1f, 0.10f), new Color(1f, 1f, 1f, 0.04f),
@@ -653,14 +659,14 @@ namespace Qiyu.Quest.UI
             layout.spacing = spacing;
             layout.padding = new RectOffset(padding, padding, padding, padding);
             layout.childControlWidth = true;
-            layout.childControlHeight = false;
+            // 同上：由父级按 LayoutElement 的 preferred 高度统一排布，
+            // 否则 Divider/Button 等都会保留默认 100px 高，卡片内部也会互相压盖。
+            layout.childControlHeight = true;
             layout.childForceExpandWidth = true;
             layout.childForceExpandHeight = false;
             layout.childAlignment = TextAnchor.UpperCenter;
-            // 高度按内容自适应；宽度由父级 ScrollView 视口控制。
-            var fitter = panel.gameObject.AddComponent<ContentSizeFitter>();
-            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            // 高度由父级纵向布局按本组件的 preferred 高度计算，不再自己挂 ContentSizeFitter，
+            // 避免父级与自身同时驱动同一个 rect 造成一帧错位。
             var layoutElement = panel.gameObject.AddComponent<LayoutElement>();
             layoutElement.flexibleWidth = 1f;
             layoutElement.minWidth = 0f;

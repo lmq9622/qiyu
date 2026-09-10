@@ -206,6 +206,12 @@ namespace Qiyu.Quest.Editor
                 "com.meta.openxr.feature.input.metaquestplus.detached",
                 // 裸手：aim/pinch 交互 profile。
                 "com.unity.openxr.feature.input.handinteraction",
+                // 关键：XR Hands 手部追踪子系统（XR_EXT_hand_tracking）。
+                // 只在项目里勾了 HandInteractionProfile 而没开这个特性时，
+                // XRHandSubsystem 不会运行、Meta 旧 OVRHand 接口也拿不到关节数据，
+                // 真机表现就是“手完全不出现”（日志：subsystem=False、bones=26 但位置全 0）。
+                "com.unity.openxr.feature.input.handtrackingsubsystem",
+                "com.unity.openxr.feature.input.handtrackingdatasource",
                 // AR Foundation / Meta OpenXR 子系统：Environment Depth、Scene Mesh、Plane。
                 "com.unity.openxr.feature.arfoundation-meta-session",
                 "com.unity.openxr.feature.arfoundation-meta-occlusion",
@@ -235,6 +241,20 @@ namespace Qiyu.Quest.Editor
                 subsampled.enabled = false;
                 EditorUtility.SetDirty(subsampled);
                 Debug.Log("[QiyuP0Setup] 已关闭 Subsampled Layout（提升 UI 边缘清晰度）");
+            }
+            // 裸手相关特性单独回读一次，避免“以为开了其实没开”。
+            FeatureHelpers.RefreshFeatures(BuildTargetGroup.Android);
+            foreach (var featureId in new[]
+            {
+                "com.unity.openxr.feature.input.handtrackingsubsystem",
+                "com.unity.openxr.feature.input.handinteraction",
+                "com.unity.openxr.feature.input.handtrackingdatasource",
+            })
+            {
+                var feature = FeatureHelpers.GetFeatureWithIdForBuildTarget(
+                    BuildTargetGroup.Android, featureId);
+                Debug.Log($"[QiyuP0Setup] 裸手特性 {featureId} = " +
+                          $"{(feature == null ? "缺失" : feature.enabled.ToString())}");
             }
             AssetDatabase.SaveAssets();
         }
@@ -492,6 +512,10 @@ namespace Qiyu.Quest.Editor
             runtimeRoot.AddComponent<QiyuInteractionBootstrap>();
             runtimeRoot.AddComponent<QiyuPointerVisuals>();
             runtimeRoot.AddComponent<QiyuHaptics>();
+            // 手/手柄可见性守卫：修 Meta 默认在“自然手柄手势”下不显示任何模型的问题。
+            var inputGuard = runtimeRoot.AddComponent<QiyuInputVisibilityGuard>();
+            // OpenXR 原生手部骨架（XR Hands）：旧 OVR 手部接口在真机上关节数据退化。
+            runtimeRoot.AddComponent<QiyuHandRig>();
 
             var serverUrl = Environment.GetEnvironmentVariable("QIYU_QUEST_WS_URL");
             if (string.IsNullOrWhiteSpace(serverUrl))
@@ -588,6 +612,11 @@ namespace Qiyu.Quest.Editor
                 ("sceneSummary", summary),
                 ("worldStatePublisher", publisher),
                 ("webSocketClient", client));
+            Wire(inputGuard,
+                ("leftHand", leftHandComponent),
+                ("rightHand", rightHandComponent),
+                ("leftController", leftControllerComponent),
+                ("rightController", rightControllerComponent));
             Wire(debugPanel,
                 ("webSocketClient", client),
                 ("microphone", microphone),
@@ -651,9 +680,54 @@ namespace Qiyu.Quest.Editor
             if (skeletonRenderer != null)
             {
                 skeletonRenderer.enabled = true;
+                SetConfidenceBehaviorNone(skeletonRenderer);
                 Debug.Log($"[QiyuP0Setup] 已开启手部骨架描边: {name}");
             }
+            var meshRenderer = instance.GetComponentInChildren<OVRMeshRenderer>(true);
+            if (meshRenderer != null)
+            {
+                meshRenderer.enabled = true;
+                SetConfidenceBehaviorNone(meshRenderer);
+            }
+            // 骨骼根位姿必须跟随手：否则整条骨骼链会留在世界原点，
+            // 手网格和指尖激光都会跑到脚下。
+            var skeleton = instance.GetComponentInChildren<OVRSkeleton>(true);
+            if (skeleton != null)
+            {
+                var skeletonSerialized = new SerializedObject(skeleton);
+                var rootPose = skeletonSerialized.FindProperty("_updateRootPose");
+                if (rootPose != null)
+                {
+                    rootPose.boolValue = true;
+                    skeletonSerialized.ApplyModifiedPropertiesWithoutUndo();
+                }
+            }
+            // 手部数据在手柄握持时由手柄驱动，此时交给手柄模型显示，手网格隐藏。
+            var handSerialized = new SerializedObject(handComponent);
+            var showState = handSerialized.FindProperty("m_showState");
+            if (showState != null)
+            {
+                showState.enumValueIndex =
+                    (int)OVRInput.InputDeviceShowState.ControllerNotInHand;
+                handSerialized.ApplyModifiedPropertiesWithoutUndo();
+            }
             Debug.Log($"[QiyuP0Setup] 已添加手部追踪: {name}");
+        }
+
+        /// <summary>
+        /// 把官方网格/骨架渲染器的置信度策略设为 None。
+        /// 默认策略是 ToggleRenderer，只在 IsDataHighConfidence 时渲染；
+        /// Quest 真机常态是 Low 置信度，会导致手部永远不显示。
+        /// </summary>
+        private static void SetConfidenceBehaviorNone(Component renderer)
+        {
+            var serialized = new SerializedObject(renderer);
+            var behavior = serialized.FindProperty("_confidenceBehavior");
+            if (behavior != null)
+            {
+                behavior.enumValueIndex = 0;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
         }
 
         private static void AddControllerPrefab(GameObject prefab, GameObject rayHelperPrefab,
@@ -675,6 +749,19 @@ namespace Qiyu.Quest.Editor
                 return;
             }
             helper.m_controller = controller;
+            var serialized = new SerializedObject(helper);
+            var showState = serialized.FindProperty("m_showState");
+            if (showState != null)
+            {
+                showState.enumValueIndex = (int)OVRInput.InputDeviceShowState.Always;
+            }
+            var showNatural = serialized.FindProperty(
+                "showWhenHandsArePoweredByNaturalControllerPoses");
+            if (showNatural != null)
+            {
+                showNatural.boolValue = true;
+            }
+            serialized.ApplyModifiedPropertiesWithoutUndo();
             if (rayHelperPrefab != null)
             {
                 var rayHelperObject = (GameObject)PrefabUtility.InstantiatePrefab(

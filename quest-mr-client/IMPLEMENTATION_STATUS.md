@@ -271,3 +271,64 @@ $env:ANDROID_NDK_ROOT='D:\Unity\Hub\Editor\6000.6.0f1\Editor\Data\PlaybackEngine
   -logFile 'D:\UnityProjects\QiyuQuestProject\Logs\p0_build7.log'
 # → Build result=Succeeded
 ```
+
+## 10. 真机根因修复记录（2026-09-10 晚，UI + 输入）
+
+这一轮不再靠猜，全部先读真机日志 / 离线布局转储定位根因，再改代码。
+
+### 10.1 UI 白块盖住一切、圆角被切（根因两条）
+
+用新增的编辑器离屏预览工具（`Qiyu/渲染 UI 预览图`、`Qiyu/转储 UI 布局树`）
+把真实界面渲染成 PNG 并导出每个节点的 rect，量出两条硬 bug：
+
+1. `QiyuUI.ScrollView` 里新建的 `Content` 没有清零 `sizeDelta`。
+   Unity 新建 RectTransform 默认 `sizeDelta=(100,100)`，配合左右拉伸锚点
+   会让内容比视口宽 100px，卡片左右各被 Viewport 的 Mask 切掉约 30px —— 
+   **正好把 30px 的圆角整个切没了**，看起来就是“方形白块、圆角被遮住”。
+2. `VerticalLayoutGroup.childControlHeight = false` 时，纵向布局用子级当前
+   `sizeDelta` 堆叠，而卡片高度是同一帧稍后才由 `ContentSizeFitter` 算出来的。
+   结果三张卡片全部按默认 100px 高叠在同一位置：
+   **白卡互相覆盖、文字全部重叠**，最后一张卡的白底盖住了整片内容区。
+
+修复：
+- `ScrollView` 显式 `content.sizeDelta = Vector2.zero`；
+- `ScrollView.Content` 与 `Card` 的 `VerticalLayoutGroup` 改为
+  `childControlHeight = true`（由父级按 `LayoutElement.preferredHeight` 排版）；
+- `Card` 不再自己挂 `ContentSizeFitter`，避免父子同时驱动同一个 rect；
+- 白色磨砂叠加层 `WhiteTint/Frost` 与 `Body` 使用相同圆角半径并铺满整张卡片。
+
+真机验证：`[QiyuUIDiag] card=Hero cardSize=(1544.00, 462.00)`（修复前是
+`1644x536` 且互相重叠），Divider=2px，卡片之间恢复 24px 间距。
+
+### 10.2 裸手完全不出现（根因：OpenXR 手部追踪子系统特性没开）
+
+真机日志：
+
+```
+[QiyuInput] connected=Hands ... RightHand valid=True tracked=False conf=Low
+            bones=26 skelPos=(0.00,0.00,0.00) tipPos=(0.00,0.00,0.00)
+[QiyuHand]  subsystem=False running=False
+```
+
+项目里只勾了 `HandInteractionProfile`（手势交互 profile），
+**没勾 `com.unity.openxr.feature.input.handtrackingsubsystem`
+（XR_EXT_hand_tracking 手部追踪子系统）**：
+
+- `XRHandSubsystem` 根本不会运行；
+- Meta 旧接口 `OVRHand/OVRSkeleton` 也只给 PointerPose，26 个关节位置全是 0
+  （整条骨骼链塌在世界原点），所以手网格退化成一个点、指尖激光无从谈起。
+
+修复：
+- `QiyuP0Setup.ConfigureOpenXR` 显式启用
+  `...input.handtrackingsubsystem` 与 `...input.handtrackingdatasource`，
+  并在构建日志里回读确认；
+- 新增 `QiyuHandRig`：走 Unity XR Hands（OpenXR 原生关节）画可见手部骨架
+  （关节球 + 骨链线），同时对外提供食指尖射线与拇指↔食指捏合距离；
+- `QiyuPointerVisuals` 改为「手柄/裸手互斥 + 优先 XR Hands 指尖射线」，
+  骨骼退化时退回 PointerPose，杜绝激光从世界原点射出；
+- `QiyuInputVisibilityGuard` 在关节链塌缩时隐藏退化的 OVR 手网格；
+- 手柄：`m_showState = Always` 且 `showWhenHandsArePoweredByNaturalControllerPoses = true`，
+  修掉「自然手柄手势模式下 Meta 把手柄模型藏掉、而手又不显示」的空白状态。
+
+真机验证：`[QiyuHand] subsystem=True running=True`（修复前 subsystem=False）。
+

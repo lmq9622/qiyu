@@ -262,7 +262,7 @@ namespace Qiyu.Quest.UI
                     _panelPoseInitialized = true;
                     return;
                 }
-                var smoothTime = Mathf.Clamp(QiyuSettings.FollowSmoothTime, 0.05f, 0.5f);
+                var smoothTime = Mathf.Clamp(QiyuSettings.FollowSmoothTime, 0.05f, 0.6f);
                 _canvasRect.position = Vector3.SmoothDamp(_canvasRect.position, targetPosition,
                     ref _panelFollowVelocity, smoothTime, 4f, Time.unscaledDeltaTime);
                 var rotationT = 1f - Mathf.Exp(-Time.unscaledDeltaTime /
@@ -1402,7 +1402,7 @@ namespace Qiyu.Quest.UI
                     Recenter();
                 }, "m");
             QiyuUI.Slider(render.transform, "FollowSmooth", "3DoF 跟随平滑（越大越拖尾）",
-                0.05f, 0.8f, QiyuSettings.FollowSmoothTime,
+                0.05f, 0.6f, QiyuSettings.FollowSmoothTime,
                 value => QiyuSettings.FollowSmoothTime = value, "s");
             QiyuUI.Toggle(render.transform, "PanelAvoidance", "面板避障（不穿墙/家具）",
                 QiyuSettings.PanelAvoidance, value =>

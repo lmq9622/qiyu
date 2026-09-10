@@ -24,6 +24,7 @@ namespace Qiyu.Quest.UI
             public LineRenderer Line;
             public Transform Dot;
             public Renderer DotRenderer;
+            public bool PinchLatched;
         }
 
         [SerializeField] private float maxDistance = 6f;
@@ -42,10 +43,13 @@ namespace Qiyu.Quest.UI
         private Material _activeMaterial;
         private Material _dotMaterial;
         private float _nextDiagnosticsAt;
+        private QiyuHandRig _handRig;
 
         private void Start()
         {
             _canvas = FindFirstObjectByType<Canvas>();
+            // OpenXR 原生手部关节（XR Hands）优先；Meta 旧接口在真机上关节是退化的。
+            _handRig = FindFirstObjectByType<QiyuHandRig>();
             CreateMaterials();
             foreach (var hand in FindObjectsByType<OVRHand>(FindObjectsInactive.Include))
             {
@@ -80,9 +84,11 @@ namespace Qiyu.Quest.UI
                 _handEventData = new PointerEventData(EventSystem.current);
             }
 
+            // 手和手柄互斥：同一时刻只画一套激光，避免两条射线互相打架。
+            var controllersConnected = AreControllersConnected();
             foreach (var visual in _visuals)
             {
-                UpdateVisual(visual);
+                UpdateVisual(visual, controllersConnected);
             }
 
             if (logDiagnostics && Time.unscaledTime >= _nextDiagnosticsAt)
@@ -130,21 +136,27 @@ namespace Qiyu.Quest.UI
             return visual;
         }
 
-        private void UpdateVisual(PointerVisual visual)
+        private void UpdateVisual(PointerVisual visual, bool controllersConnected)
         {
             if (visual?.Source == null)
             {
                 return;
             }
-            var active = IsSourceActive(visual);
+            var active = IsSourceActive(visual, controllersConnected);
             if (!active)
+            {
+                visual.Line.enabled = false;
+                visual.Dot.gameObject.SetActive(false);
+                visual.PinchLatched = false;
+                return;
+            }
+
+            if (!GetPointerRay(visual, out var origin, out var direction))
             {
                 visual.Line.enabled = false;
                 visual.Dot.gameObject.SetActive(false);
                 return;
             }
-
-            GetPointerRay(visual, out var origin, out var direction);
             var end = origin + direction * maxDistance;
             var hit = false;
             RaycastResult hitResult = default;
@@ -183,44 +195,74 @@ namespace Qiyu.Quest.UI
             }
         }
 
-        private static bool IsSourceActive(PointerVisual visual)
+        /// <summary>当前是否有 Touch 手柄处于连接状态。</summary>
+        private static bool AreControllersConnected()
+        {
+            var connected = OVRInput.GetConnectedControllers();
+            return (connected & (OVRInput.Controller.LTouch | OVRInput.Controller.RTouch)) != 0;
+        }
+
+        private bool IsSourceActive(PointerVisual visual, bool controllersConnected)
         {
             if (visual.Hand != null)
             {
-                // tracked=False 但 pointer/data 有效时也要给用户反馈；
+                // 拿着手柄时不再画手的激光（否则会出现两套互相穿模的射线）。
+                if (controllersConnected)
+                {
+                    return false;
+                }
+                if (_handRig != null && _handRig.IsTracked(SideOf(visual.Hand)))
+                {
+                    return true;
+                }
+                // tracked=False 但 data 有效时也要给用户反馈；
                 // 否则低置信度裸手会完全消失。
-                return visual.Hand.IsPointerPoseValid || visual.Hand.IsDataValid;
+                return visual.Hand.IsDataValid || visual.Hand.IsPointerPoseValid;
             }
             return visual.Controller != null && visual.Controller.IsActive();
         }
 
-        private static void GetPointerRay(PointerVisual visual, out Vector3 origin,
-                                          out Vector3 direction)
+        private static QiyuHandRig.HandSide SideOf(OVRHand hand)
         {
-            if (visual.Hand != null && TryGetHandRay(visual.Hand, out origin, out direction))
+            return hand.GetHand() == OVRPlugin.Hand.HandLeft
+                ? QiyuHandRig.HandSide.Left
+                : QiyuHandRig.HandSide.Right;
+        }
+
+        private bool GetPointerRay(PointerVisual visual, out Vector3 origin,
+                                   out Vector3 direction)
+        {
+            if (visual.Hand != null)
             {
-                return;
+                if (_handRig != null &&
+                    _handRig.TryGetIndexRay(SideOf(visual.Hand), out origin, out direction))
+                {
+                    return true;
+                }
+                return TryGetHandRay(visual.Hand, out origin, out direction);
             }
             origin = visual.Source.position;
             direction = visual.Source.forward;
+            return true;
         }
 
         /// <summary>
-        /// 裸手射线不再用 OVRHand.PointerPose（捏合时会斜向上），
-        /// 改成食指指节 → 食指指尖的方向，激光顺着手指走。
+        /// 裸手射线：从食指指尖出发、沿着食指第二节→指尖的方向。
+        /// 不再用 OVRHand.PointerPose（它在手背上，捏合时会斜向上），
+        /// 拿不到骨骼时宁可不画，也不要甩出一条方向错误的乱线。
         /// </summary>
         private static bool TryGetHandRay(OVRHand hand, out Vector3 origin,
                                           out Vector3 direction)
         {
-            origin = hand.PointerPose.position;
-            direction = hand.PointerPose.forward;
+            var pointer = hand.PointerPose;
+            origin = pointer.position;
+            direction = pointer.forward;
             var skeleton = hand.GetComponentInChildren<OVRSkeleton>(true);
             if (skeleton == null || skeleton.Bones == null || skeleton.Bones.Count == 0)
             {
-                ApplyPointerCorrection(hand, ref origin, ref direction);
-                return true;
+                return hand.IsDataValid;
             }
-            Transform distal = null;
+            Transform middle = null;
             Transform tip = null;
             foreach (var bone in skeleton.Bones)
             {
@@ -228,10 +270,12 @@ namespace Qiyu.Quest.UI
                 {
                     continue;
                 }
-                if (bone.Id == OVRSkeleton.BoneId.Hand_Index1 ||
-                    bone.Id == OVRSkeleton.BoneId.XRHand_IndexProximal)
+                if (bone.Id == OVRSkeleton.BoneId.Hand_Index2 ||
+                    bone.Id == OVRSkeleton.BoneId.Hand_Index3 ||
+                    bone.Id == OVRSkeleton.BoneId.XRHand_IndexDistal ||
+                    bone.Id == OVRSkeleton.BoneId.XRHand_IndexIntermediate)
                 {
-                    distal = bone.Transform;
+                    middle = bone.Transform;
                 }
                 else if (bone.Id == OVRSkeleton.BoneId.Hand_IndexTip ||
                          bone.Id == OVRSkeleton.BoneId.XRHand_IndexTip)
@@ -241,34 +285,26 @@ namespace Qiyu.Quest.UI
             }
             if (tip == null)
             {
-                ApplyPointerCorrection(hand, ref origin, ref direction);
-                return true;
+                return hand.IsDataValid;
             }
-            origin = tip.position;
-            if (distal != null)
+            var tipPosition = tip.position;
+            // 骨骼数据退化时（真机上出现过整条链停在原点、只有 PointerPose 有效）
+            // 指尖会离手十万八千里，这时必须退回 PointerPose，否则激光从世界原点射出。
+            if (Vector3.Distance(tipPosition, pointer.position) > 0.5f)
             {
-                var fingerDirection = tip.position - distal.position;
+                return hand.IsDataValid;
+            }
+            origin = tipPosition;
+            if (middle != null)
+            {
+                var fingerDirection = tipPosition - middle.position;
                 if (fingerDirection.sqrMagnitude > 0.000001f)
                 {
                     direction = fingerDirection.normalized;
                     return true;
                 }
             }
-            ApplyPointerCorrection(hand, ref origin, ref direction);
             return true;
-        }
-
-        /// <summary>
-        /// 低置信度时 OVRSkeleton 可能没有骨骼，此时 PointerPose 会指向手背斜上方。
-        /// 这里把射线向前推一点并向下修正，视觉上落到食指方向。
-        /// </summary>
-        private static void ApplyPointerCorrection(OVRHand hand, ref Vector3 origin,
-                                                   ref Vector3 direction)
-        {
-            origin = hand.PointerPose.position + hand.PointerPose.forward * 0.02f;
-            direction = Quaternion.AngleAxis(22f, hand.PointerPose.right) *
-                        hand.PointerPose.forward;
-            direction.Normalize();
         }
 
         private void UpdateHandInteraction(PointerVisual visual, RaycastResult hitResult,
@@ -292,10 +328,7 @@ namespace Qiyu.Quest.UI
                 }
             }
 
-            var pinchStrength = visual.Hand.GetFingerPinchStrength(
-                OVRHand.HandFinger.Index);
-            var pinching = pinchStrength > 0.65f ||
-                           visual.Hand.GetFingerIsPinching(OVRHand.HandFinger.Index);
+            var pinching = IsPinching(visual);
             if (hovered != null)
             {
                 _handEventData.pointerCurrentRaycast = hitResult;
@@ -304,13 +337,71 @@ namespace Qiyu.Quest.UI
                 {
                     slider.SetFromPointer(_handEventData);
                 }
-                else if (pinching && !_wasHandPinching)
+                else if (pinching && !visual.PinchLatched)
                 {
                     ExecuteEvents.ExecuteHierarchy(hovered, _handEventData,
                         ExecuteEvents.pointerClickHandler);
                 }
             }
+            visual.PinchLatched = pinching;
             _wasHandPinching = pinching;
+        }
+
+        /// <summary>
+        /// 捏合判定：优先用运行时给的 pinch，拿不到就退回“拇指尖↔食指尖距离”。
+        /// 低置信度下 OVRHand 的 pinch 位经常是 0，纯靠它会捏不亮按钮。
+        /// </summary>
+        private bool IsPinching(PointerVisual visual)
+        {
+            var hand = visual.Hand;
+            if (_handRig != null)
+            {
+                var rigDistance = _handRig.PinchDistance(SideOf(hand));
+                if (rigDistance >= 0f)
+                {
+                    // 迟滞：捏下去用 2.2cm，松开要回到 2.8cm 以上，避免临界抖动连点。
+                    return visual.PinchLatched
+                        ? rigDistance < 0.028f
+                        : rigDistance < 0.022f;
+                }
+            }
+            if (hand.GetFingerIsPinching(OVRHand.HandFinger.Index) ||
+                hand.GetFingerPinchStrength(OVRHand.HandFinger.Index) > 0.6f)
+            {
+                return true;
+            }
+
+            var skeleton = hand.GetComponentInChildren<OVRSkeleton>(true);
+            if (skeleton?.Bones == null)
+            {
+                return false;
+            }
+            Transform thumbTip = null;
+            Transform indexTip = null;
+            foreach (var bone in skeleton.Bones)
+            {
+                if (bone?.Transform == null)
+                {
+                    continue;
+                }
+                if (bone.Id == OVRSkeleton.BoneId.Hand_ThumbTip ||
+                    bone.Id == OVRSkeleton.BoneId.XRHand_ThumbTip)
+                {
+                    thumbTip = bone.Transform;
+                }
+                else if (bone.Id == OVRSkeleton.BoneId.Hand_IndexTip ||
+                         bone.Id == OVRSkeleton.BoneId.XRHand_IndexTip)
+                {
+                    indexTip = bone.Transform;
+                }
+            }
+            if (thumbTip == null || indexTip == null)
+            {
+                return false;
+            }
+            var distance = Vector3.Distance(thumbTip.position, indexTip.position);
+            // 迟滞：捏下去用 2.0cm，松开要回到 2.6cm 以上，避免临界抖动连点。
+            return visual.PinchLatched ? distance < 0.026f : distance < 0.020f;
         }
 
         private void CreateMaterials()
