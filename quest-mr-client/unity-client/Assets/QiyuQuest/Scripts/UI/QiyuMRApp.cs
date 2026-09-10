@@ -109,6 +109,14 @@ namespace Qiyu.Quest.UI
         private readonly List<string> _chatLines = new List<string>();
         private float _nextRefreshAt;
         private float _smoothedFps = 72f;
+        private float _pendingRecenterAt;
+        private bool _recenterWatch;
+        private float _recenterWatchUntil;
+        private Vector3 _recenterRefPosition;
+        private Quaternion _recenterRefRotation = Quaternion.identity;
+        private Vector3 _lastHeadPosition;
+        private Quaternion _lastHeadRotation = Quaternion.identity;
+        private float _headTrackingReadyAt;
 
         private void Start()
         {
@@ -127,6 +135,9 @@ namespace Qiyu.Quest.UI
             BuildShell();
             ShowTab("首页");
             Recenter();
+            // 启动头两秒跟踪位姿可能还在初始化，不要参与“跳变”判断。
+            _headTrackingReadyAt = Time.unscaledTime + 2f;
+            OVRManager.TrackingOriginChangePending += HandleTrackingOriginChange;
             if (webSocketClient != null)
             {
                 webSocketClient.OnMessage += HandleMessage;
@@ -157,6 +168,7 @@ namespace Qiyu.Quest.UI
 
         private void OnDestroy()
         {
+            OVRManager.TrackingOriginChangePending -= HandleTrackingOriginChange;
             if (webSocketClient != null)
             {
                 webSocketClient.OnMessage -= HandleMessage;
@@ -228,6 +240,7 @@ namespace Qiyu.Quest.UI
         {
             _smoothedFps = Mathf.Lerp(_smoothedFps, 1f / Mathf.Max(0.0001f,
                 Time.unscaledDeltaTime), 0.08f);
+            WatchSystemRecenter();
             UpdatePanelTransform();
             UpdateTopBar();
             UpdateActivePanel();
@@ -239,6 +252,42 @@ namespace Qiyu.Quest.UI
                     Recenter();
                 }
             }
+        }
+
+        private void LateUpdate()
+        {
+            WatchRecenterJump();
+            DetectRecenterFallback();
+            TrackHeadPose();
+        }
+
+        /// <summary>
+        /// 兜底：万一运行时没有发 TrackingOriginChangePending（不同版本/不同入口可能不一致），
+        /// 用“单帧头部世界位姿突然跳变”来识别重置视角。
+        /// 阈值取 45°：人快速转头约 500°/s，100ms 内也到不了 45°，所以不会误判成转头。
+        /// </summary>
+        private void DetectRecenterFallback()
+        {
+            if (_recenterWatch || followTarget == null ||
+                Time.unscaledTime < _headTrackingReadyAt ||
+                Time.unscaledDeltaTime > 0.1f)
+            {
+                return;
+            }
+            var angle = Quaternion.Angle(_lastHeadRotation, followTarget.rotation);
+            var moved = Vector3.Distance(_lastHeadPosition, followTarget.position);
+            if (angle < 45f && moved < 1.0f)
+            {
+                return;
+            }
+            var delta = Matrix4x4.TRS(followTarget.position, followTarget.rotation,
+                            Vector3.one) *
+                        Matrix4x4.TRS(_lastHeadPosition, _lastHeadRotation,
+                            Vector3.one).inverse;
+            var applied = RebaseWorldContent(delta);
+            _pendingRecenterAt = Time.unscaledTime + 0.12f;
+            Debug.Log($"[QiyuMRApp] 兜底识别到重置视角（事件未触发）修正={applied} " +
+                      $"yaw跳变={angle:F1}° 位移={moved:F2}m");
         }
 
         private void UpdatePanelTransform()
@@ -478,7 +527,12 @@ namespace Qiyu.Quest.UI
         private void BuildShell()
         {
             var canvasObject = new GameObject("QiyuMRAppCanvas");
-            canvasObject.transform.SetParent(null, false);
+            // UI 是“跟着用户”的内容，不是房间里的东西：
+            // 必须挂在 CameraRig 的 TrackingSpace 下，系统重置视角（recenter）时
+            // 面板才会跟头部坐标系一起走。挂在场景根节点的话，recenter 之后
+            // 头显/手柄动了、窗口却留在原地，看起来就是“世界乱了、窗口不动”。
+            var trackingSpace = ResolveTrackingSpace();
+            canvasObject.transform.SetParent(trackingSpace, false);
             _canvas = canvasObject.AddComponent<Canvas>();
             _canvas.renderMode = RenderMode.WorldSpace;
             _canvas.sortingOrder = 200;
@@ -528,6 +582,130 @@ namespace Qiyu.Quest.UI
             _renderQuality = canvasObject.AddComponent<QiyuRenderQuality>();
             _renderQuality.ApplyFromSettings();
             ApplyPanelMode();
+        }
+
+        /// <summary>
+        /// 找到 OVRCameraRig 的 TrackingSpace；拿不到就退回场景里叫 TrackingSpace 的节点。
+        /// </summary>
+        private static Transform ResolveTrackingSpace()
+        {
+            var rig = FindFirstObjectByType<OVRCameraRig>();
+            if (rig != null && rig.trackingSpace != null)
+            {
+                return rig.trackingSpace;
+            }
+            var all = FindObjectsByType<Transform>(FindObjectsInactive.Include);
+            foreach (var candidate in all)
+            {
+                if (candidate != null && candidate.name == "TrackingSpace")
+                {
+                    return candidate;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 系统级“重置视角”（长按 Meta 键）会在运行时改写跟踪原点：
+        /// 房间内容不动、跟头的手柄和 UI 应该跟着动。
+        /// Meta 官方事件是 TrackingOriginChangePending，收到后延迟一帧再重置面板位置
+        /// （事件发出时新坐标系还没生效），把面板重新摆回正前方。
+        /// </summary>
+        private void HandleTrackingOriginChange(OVRManager.TrackingOrigin origin,
+                                                OVRPose? poseInPreviousSpace)
+        {
+            _pendingRecenterAt = Time.unscaledTime + 0.12f;
+            // 重置视角只改“设备位姿 → Unity 坐标”的映射，不会移动任何 Transform。
+            // 观察接下来几帧头部世界位姿的跳变量，用同一个变换去换算房间内容，
+            // 这样无论运行时的实现细节如何，房间/角色都会和真实房间保持一致。
+            _recenterWatch = true;
+            _recenterWatchUntil = Time.unscaledTime + 0.5f;
+            _recenterRefRotation = _lastHeadRotation;
+            _recenterRefPosition = _lastHeadPosition;
+            Debug.Log("[QiyuMRApp] 检测到系统重置视角 origin=" + origin +
+                      " 事件位姿=" + (poseInPreviousSpace.HasValue ? "有" : "无") +
+                      "，等待坐标系跳变");
+        }
+
+        /// <summary>
+        /// 把“房间坐标系里的内容”用一个世界空间刚体变换整体换算过去。
+        /// 跳过相机 Rig 自身的层级（头显/手柄在它下面，由运行时直接给新位姿）。
+        /// </summary>
+        private bool RebaseWorldContent(Matrix4x4 delta)
+        {
+            var trackingSpace = ResolveTrackingSpace();
+            var scene = gameObject.scene;
+            if (!scene.IsValid())
+            {
+                return false;
+            }
+            var rigRoot = trackingSpace != null ? trackingSpace.root : null;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (root == null || root.transform == rigRoot)
+                {
+                    continue;
+                }
+                var target = root.transform;
+                var current = Matrix4x4.TRS(target.position, target.rotation,
+                    Vector3.one);
+                var moved = delta * current;
+                target.SetPositionAndRotation(moved.GetColumn(3), moved.rotation);
+            }
+            return true;
+        }
+
+        /// <summary>每帧记录头部世界位姿，作为重置视角跳变的参照。</summary>
+        private void TrackHeadPose()
+        {
+            if (followTarget == null)
+            {
+                return;
+            }
+            _lastHeadPosition = followTarget.position;
+            _lastHeadRotation = followTarget.rotation;
+        }
+
+        private void WatchRecenterJump()
+        {
+            if (!_recenterWatch)
+            {
+                return;
+            }
+            if (Time.unscaledTime > _recenterWatchUntil)
+            {
+                _recenterWatch = false;
+                Debug.Log("[QiyuMRApp] 重置视角等待超时，未检测到坐标系跳变");
+                return;
+            }
+            if (followTarget == null)
+            {
+                return;
+            }
+            var delta = Matrix4x4.TRS(_lastHeadPosition, _lastHeadRotation, Vector3.one) *
+                        Matrix4x4.TRS(_recenterRefPosition, _recenterRefRotation,
+                            Vector3.one).inverse;
+            var offset = (Vector3)delta.GetColumn(3) - _recenterRefPosition;
+            if (Quaternion.Angle(delta.rotation, Quaternion.identity) < 5f &&
+                offset.sqrMagnitude < 0.0025f)
+            {
+                return;
+            }
+            _recenterWatch = false;
+            var applied = RebaseWorldContent(delta);
+            Debug.Log($"[QiyuMRApp] 重置视角跳变修正={applied} " +
+                      $"yaw={delta.rotation.eulerAngles.y:F1} " +
+                      $"offset={offset:F3}");
+        }
+
+        private void WatchSystemRecenter()
+        {
+            if (_pendingRecenterAt <= 0f || Time.unscaledTime < _pendingRecenterAt)
+            {
+                return;
+            }
+            _pendingRecenterAt = 0f;
+            Recenter();
         }
 
         private void BuildTopBar(Transform parent)

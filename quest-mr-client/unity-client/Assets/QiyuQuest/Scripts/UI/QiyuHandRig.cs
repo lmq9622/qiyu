@@ -28,10 +28,10 @@ namespace Qiyu.Quest.UI
         }
 
         [SerializeField] private bool visualize = true;
-        [SerializeField] private Color leftColor = new Color(0.42f, 0.84f, 1f, 0.95f);
-        [SerializeField] private Color rightColor = new Color(1f, 0.60f, 0.72f, 0.95f);
-        [SerializeField] private float jointSize = 0.012f;
-        [SerializeField] private float lineWidth = 0.006f;
+        [SerializeField] private Color leftColor = new Color(0.48f, 0.88f, 1f, 0.95f);
+        [SerializeField] private Color rightColor = new Color(1f, 0.82f, 0.45f, 0.95f);
+        [SerializeField] private float jointSize = 0.013f;
+        [SerializeField] private float lineWidth = 0.0055f;
         [SerializeField] private bool logDiagnostics = true;
 
         /// <summary>骨链：按 OpenXR 关节层级连线，画出来就是一只手的骨架。</summary>
@@ -79,6 +79,8 @@ namespace Qiyu.Quest.UI
             public Material JointMaterial;
             public readonly List<LineRenderer> Lines = new List<LineRenderer>();
             public readonly List<Matrix4x4> Matrices = new List<Matrix4x4>(32);
+            public Transform FallbackMarker;
+            public Renderer FallbackRenderer;
             public bool Visible;
         }
 
@@ -87,7 +89,11 @@ namespace Qiyu.Quest.UI
         private XRHandSubsystem _subsystem;
         private Mesh _sphere;
         private float _nextLogAt;
+        private float _nextSubsystemCheckAt;
         private bool _warnedAboutSubsystem;
+        private OVRHand _leftOvrHand;
+        private OVRHand _rightOvrHand;
+        private int _lastSubsystemId = -1;
 
         public bool IsReady => _subsystem != null && _subsystem.running;
 
@@ -95,12 +101,38 @@ namespace Qiyu.Quest.UI
         public bool IsTracked(HandSide side)
         {
             var hand = GetHand(side);
-            return hand.isTracked;
+            if (hand.isTracked)
+            {
+                return true;
+            }
+            // 子系统把 isTracked 置 false、但关节仍然可用（推断/上一帧姿态）时也要算可用，
+            // 否则手部骨架会在中途整条消失。
+            return CountValidJoints(side) >= 4;
         }
 
         private void Awake()
         {
             CreateVisuals();
+        }
+
+        private void Start()
+        {
+            var hands = FindObjectsByType<OVRHand>(FindObjectsInactive.Include);
+            foreach (var candidate in hands)
+            {
+                if (candidate == null)
+                {
+                    continue;
+                }
+                if (candidate.GetHand() == OVRPlugin.Hand.HandLeft)
+                {
+                    _leftOvrHand = candidate;
+                }
+                else if (candidate.GetHand() == OVRPlugin.Hand.HandRight)
+                {
+                    _rightOvrHand = candidate;
+                }
+            }
         }
 
         private void Update()
@@ -119,12 +151,24 @@ namespace Qiyu.Quest.UI
         {
             pose = default;
             var hand = GetHand(side);
-            if (!hand.isTracked)
-            {
-                return false;
-            }
             var joint = hand.GetJoint(id);
             return joint.TryGetPose(out pose);
+        }
+
+        /// <summary>统计当前有效的关节数，用于判断手是否可用。</summary>
+        private int CountValidJoints(HandSide side)
+        {
+            var count = 0;
+            var hand = GetHand(side);
+            for (var id = XRHandJointID.BeginMarker;
+                 id < XRHandJointID.EndMarker; id++)
+            {
+                if (hand.GetJoint(id).TryGetPose(out _))
+                {
+                    count++;
+                }
+            }
+            return count;
         }
 
         /// <summary>
@@ -174,22 +218,53 @@ namespace Qiyu.Quest.UI
 
         private void EnsureSubsystem()
         {
-            if (_subsystem != null && _subsystem.running)
+            if (Time.unscaledTime < _nextSubsystemCheckAt)
             {
                 return;
             }
+            // 每秒回查一次：手柄/裸手切换、会话重启都可能换掉子系统实例，
+            // 只认引用一次会导致“开始有手、切一次模式后再也不出现”。
+            _nextSubsystemCheckAt = Time.unscaledTime + 1f;
             _subsystems.Clear();
             SubsystemManager.GetSubsystems(_subsystems);
+            XRHandSubsystem running = null;
+            XRHandSubsystem fallback = null;
             foreach (var candidate in _subsystems)
             {
-                if (candidate != null && candidate.running)
+                if (candidate == null)
                 {
-                    _subsystem = candidate;
-                    Debug.Log("[QiyuHand] 已接入 XRHandSubsystem（OpenXR 手部追踪）");
-                    return;
+                    continue;
+                }
+                fallback ??= candidate;
+                if (candidate.running)
+                {
+                    running = candidate;
+                    break;
                 }
             }
-            _subsystem = _subsystems.Count > 0 ? _subsystems[0] : null;
+            var best = running ?? fallback;
+            if (best != null && !best.running)
+            {
+                // 手柄/裸手来回切换时子系统可能被停下；这里主动拉起来，
+                // 否则会表现成“手出现一次之后再也不回来”。
+                try
+                {
+                    best.Start();
+                    Debug.Log("[QiyuHand] 手部子系统未运行，已尝试重新启动");
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning("[QiyuHand] 重启手部子系统失败: " + e.Message);
+                }
+            }
+            if (!ReferenceEquals(best, _subsystem))
+            {
+                _subsystem = best;
+                _lastSubsystemId = best != null ? best.GetHashCode() : -1;
+                Debug.Log($"[QiyuHand] 接入 XRHandSubsystem id={_lastSubsystemId} " +
+                          $"running={best != null && best.running} " +
+                          $"count={_subsystems.Count}");
+            }
             if (!_warnedAboutSubsystem && Time.unscaledTime > 8f)
             {
                 _warnedAboutSubsystem = true;
@@ -228,6 +303,23 @@ namespace Qiyu.Quest.UI
                     line.enabled = false;
                     visual.Lines.Add(line);
                 }
+                // 兜底位置指示球
+                var marker = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+                marker.name = "FallbackMarker";
+                marker.transform.SetParent(root.transform, false);
+                marker.transform.localScale = Vector3.one * 0.035f;
+                var collider = marker.GetComponent<Collider>();
+                if (collider != null)
+                {
+                    Destroy(collider);
+                }
+                visual.FallbackRenderer = marker.GetComponent<Renderer>();
+                if (visual.FallbackRenderer != null)
+                {
+                    visual.FallbackRenderer.sharedMaterial = visual.JointMaterial;
+                }
+                visual.FallbackMarker = marker.transform;
+                marker.SetActive(false);
                 _visuals.Add(visual);
             }
         }
@@ -240,15 +332,8 @@ namespace Qiyu.Quest.UI
             }
             foreach (var visual in _visuals)
             {
-                var hand = GetHand(visual.Side);
-                var tracked = hand.isTracked;
-                if (!tracked)
-                {
-                    SetVisible(visual, false);
-                    continue;
-                }
-
                 visual.Matrices.Clear();
+                var anyChainValid = false;
                 for (var i = 0; i < Chains.Length; i++)
                 {
                     var chain = Chains[i];
@@ -269,8 +354,12 @@ namespace Qiyu.Quest.UI
                         }
                     }
                     line.enabled = valid;
+                    anyChainValid |= valid;
                 }
-                SetVisible(visual, true);
+
+                // 关节完全拿不到时，至少用 Meta 旧接口的 PointerPose 放一个位置指示球，
+                // 保证“手在哪”始终看得见，而不是整条骨架突然消失。
+                UpdateFallbackMarker(visual, !anyChainValid);
                 if (visual.Matrices.Count > 0)
                 {
                     Graphics.DrawMeshInstanced(_sphere, 0, visual.JointMaterial,
@@ -279,16 +368,28 @@ namespace Qiyu.Quest.UI
             }
         }
 
-        private static void SetVisible(HandVisual visual, bool visible)
+        private void UpdateFallbackMarker(HandVisual visual, bool allowed)
         {
-            if (visual.Visible == visible)
+            if (visual.FallbackMarker == null)
             {
                 return;
             }
-            visual.Visible = visible;
-            foreach (var line in visual.Lines)
+            var hand = visual.Side == HandSide.Left ? _leftOvrHand : _rightOvrHand;
+            var valid = false;
+            var position = Vector3.zero;
+            if (allowed && hand != null && hand.IsDataValid && hand.IsPointerPoseValid)
             {
-                line.enabled = visible && line.positionCount > 1;
+                position = hand.PointerPose.position;
+                // 旧接口退化时会返回 (0,0,0)，这种点不显示，免得球飞到世界原点。
+                valid = position.sqrMagnitude > 0.01f;
+            }
+            if (visual.FallbackMarker.gameObject.activeSelf != valid)
+            {
+                visual.FallbackMarker.gameObject.SetActive(valid);
+            }
+            if (valid)
+            {
+                visual.FallbackMarker.position = position;
             }
         }
 
@@ -296,13 +397,15 @@ namespace Qiyu.Quest.UI
         {
             var left = GetHand(HandSide.Left);
             var right = GetHand(HandSide.Right);
-            Debug.Log($"[QiyuHand] subsystem={(_subsystem != null)} " +
+            Debug.Log($"[QiyuHand] sub={_lastSubsystemId} " +
                       $"running={_subsystem != null && _subsystem.running} " +
-                      $"leftTracked={left.isTracked} rightTracked={right.isTracked} " +
-                      $"leftIndex={Format(HandSide.Left, XRHandJointID.IndexTip)} " +
-                      $"rightIndex={Format(HandSide.Right, XRHandJointID.IndexTip)} " +
-                      $"pinchL={PinchDistance(HandSide.Left):F3} " +
-                      $"pinchR={PinchDistance(HandSide.Right):F3}");
+                      $"L(tracked={left.isTracked} joints={CountValidJoints(HandSide.Left)} " +
+                      $"idx={Format(HandSide.Left, XRHandJointID.IndexTip)} " +
+                      $"pinch={PinchDistance(HandSide.Left):F3}) " +
+                      $"R(tracked={right.isTracked} joints={CountValidJoints(HandSide.Right)} " +
+                      $"idx={Format(HandSide.Right, XRHandJointID.IndexTip)} " +
+                      $"pinch={PinchDistance(HandSide.Right):F3}) " +
+                      $"connected={OVRInput.GetConnectedControllers()}");
         }
 
         private string Format(HandSide side, XRHandJointID id)
