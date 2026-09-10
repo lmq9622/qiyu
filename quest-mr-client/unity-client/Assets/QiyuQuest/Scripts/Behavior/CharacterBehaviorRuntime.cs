@@ -48,6 +48,10 @@ namespace Qiyu.Quest.Behavior
 
         [Header("角色引用")]
         [SerializeField] private Transform avatarRoot;
+        [Header("角色模型（Resources 路径，留空则用占位角色）")]
+        [SerializeField] private string avatarModelResource = "Qiyu/Avatar/QiyuAvatarModel";
+        [SerializeField] private float avatarModelYawOffset;
+        [SerializeField] private float avatarModelScale = 1f;
         [SerializeField] private Transform userHead;
 
         [Header("运行时")]
@@ -889,6 +893,54 @@ namespace Qiyu.Quest.Behavior
         }
 
         /// <summary>
+        /// 载入真实角色模型（Resources 下的 Humanoid FBX）。
+        /// 找不到就保持占位角色并明确告警，不假装已加载。
+        /// 必须在 AddComponent 之前调用：动画层用 GetComponentInChildren 找 Animator。
+        /// </summary>
+        private void EnsureAvatarModel()
+        {
+            if (avatarRoot == null || avatarRoot.childCount > 0)
+            {
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(avatarModelResource))
+            {
+                return;
+            }
+            var prefab = Resources.Load<GameObject>(avatarModelResource);
+            if (prefab == null)
+            {
+                Debug.LogWarning(
+                    $"[QiyuAvatar] 未找到 Resources/{avatarModelResource}，" +
+                    "继续使用占位角色（不伪装成已加载真实模型）");
+                return;
+            }
+            var model = Instantiate(prefab, avatarRoot);
+            model.name = "QiyuAvatarModel";
+            model.transform.localPosition = Vector3.zero;
+            model.transform.localRotation = Quaternion.Euler(0f, avatarModelYawOffset, 0f);
+            model.transform.localScale = Vector3.one * avatarModelScale;
+            var animator = model.GetComponentInChildren<Animator>();
+            if (animator == null)
+            {
+                animator = model.AddComponent<Animator>();
+            }
+            animator.applyRootMotion = false;
+            animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+            foreach (var renderer in model.GetComponentsInChildren<Renderer>())
+            {
+                renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            }
+            var isHuman = animator.avatar != null && animator.avatar.isHuman;
+            Debug.Log($"[QiyuAvatar] 已载入角色模型 {prefab.name} humanoid={isHuman} " +
+                      $"yawOffset={avatarModelYawOffset:F0}");
+            if (!isHuman)
+            {
+                Debug.LogWarning("[QiyuAvatar] Avatar 不是 Humanoid，程序化动作/重定向不可用");
+            }
+        }
+
+        /// <summary>
         /// 兼容旧场景：即使场景尚未重新执行 QiyuP0Setup，也能补齐行为运行时组件。
         /// 这是装配兜底，不改变任何模型/协议语义。
         /// </summary>
@@ -937,6 +989,7 @@ namespace Qiyu.Quest.Behavior
                 }
                 avatarRoot = found.transform;
             }
+            EnsureAvatarModel();
             if (avatarRoot.GetComponent<NavMeshAgent>() == null)
             {
                 avatarRoot.gameObject.AddComponent<NavMeshAgent>();
@@ -944,9 +997,11 @@ namespace Qiyu.Quest.Behavior
             if (avatarRoot.GetComponent<CapsuleCollider>() == null)
             {
                 var capsule = avatarRoot.gameObject.AddComponent<CapsuleCollider>();
-                capsule.height = 1.7f;
-                capsule.radius = 0.25f;
-                capsule.center = new Vector3(0f, 0.85f, 0f);
+                // 与 NavMesh 烘焙半径 0.16/运行半径 0.18 对齐，
+                // 否则碰撞体会比导航面还宽，走起来像一直被卡住。
+                capsule.height = 1.65f;
+                capsule.radius = 0.18f;
+                capsule.center = new Vector3(0f, 0.82f, 0f);
             }
             if (avatarRoot.GetComponent<Rigidbody>() == null)
             {

@@ -18,14 +18,24 @@ namespace Qiyu.Quest.Spatial
         [SerializeField] private bool buildOnRoomLoaded = true;
 
         [Header("Agent 参数")]
-        [SerializeField] private float agentRadius = 0.25f;
-        [SerializeField] private float agentHeight = 1.6f;
+        // 0.25 的腐蚀半径会沿 12.5m 墙周长吃掉约 3m²，小房间里角色会“没路可走”。
+        // 角色是虚拟形象，0.16 足够避免明显穿模，同时能走到人去得了的位置。
+        [SerializeField] private float agentRadius = 0.16f;
+        [SerializeField] private float agentHeight = 1.5f;
         [SerializeField] private float agentClimb = 0.3f;
         [SerializeField] private float agentSlope = 45f;
+
+        [Header("用户足迹覆盖率自检")]
+        [SerializeField] private bool trackUserCoverage = true;
+        [SerializeField] private float userSampleInterval = 1.5f;
+        [SerializeField] private int userSampleLogEvery = 10;
 
         private NavMeshData _navMeshData;
         private NavMeshDataInstance _instance;
         private float _floorY;
+        private int _userSamples;
+        private int _userOnMeshSamples;
+        private float _nextUserSampleAt;
 
         public bool Generated { get; private set; }
         public int Version { get; private set; }
@@ -66,6 +76,43 @@ namespace Qiyu.Quest.Spatial
             if (buildOnRoomLoaded)
             {
                 Build(room);
+            }
+        }
+
+        /// <summary>
+        /// 用户足迹覆盖率：用户实际站过/走过的位置有多少落在 NavMesh 上。
+        /// 这是判断“人能走的地方角色能不能走”最直接的指标——比几何推导可靠。
+        /// </summary>
+        private void Update()
+        {
+            if (!trackUserCoverage || !Generated)
+            {
+                return;
+            }
+            if (Time.unscaledTime < _nextUserSampleAt)
+            {
+                return;
+            }
+            _nextUserSampleAt = Time.unscaledTime + Mathf.Max(0.25f, userSampleInterval);
+            var camera = Camera.main;
+            if (camera == null)
+            {
+                return;
+            }
+            var p = camera.transform.position;
+            p.y = _floorY + 0.05f;
+            _userSamples++;
+            var onMesh = NavMesh.SamplePosition(p, out _, 0.6f, NavMesh.AllAreas);
+            if (onMesh)
+            {
+                _userOnMeshSamples++;
+            }
+            if (userSampleLogEvery > 0 && _userSamples % userSampleLogEvery == 0)
+            {
+                var percent = 100f * _userOnMeshSamples / Mathf.Max(1, _userSamples);
+                Debug.Log(
+                    $"[QuestNavMesh] 用户足迹覆盖 {_userOnMeshSamples}/{_userSamples} " +
+                    $"({percent:F0}%) 当前位置 onMesh={onMesh}");
             }
         }
 

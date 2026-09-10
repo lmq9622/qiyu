@@ -34,3 +34,8 @@ venv/
 # 这里定向放行：P7 验收脚本必须入库，否则文档引用的命令无处可寻。
 !tools/
 !tools/**
+
+# 验收用 MMD 角色模型：作者要求「禁止二次配布」，模型本体不入库。
+# 只在本地用 tools/avatar 转换后放进 Unity 工程使用。
+unity-client/Assets/QiyuQuest/Resources/Qiyu/Avatar/
+unity-client/Assets/QiyuQuest/AvatarAssets/

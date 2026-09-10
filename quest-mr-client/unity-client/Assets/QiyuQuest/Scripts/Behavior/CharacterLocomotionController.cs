@@ -45,6 +45,10 @@ namespace Qiyu.Quest.Behavior
             _agent.acceleration = acceleration;
             _agent.angularSpeed = angularSpeed;
             _agent.stoppingDistance = 0.05f;
+            // 与 RoomNavMeshBuilder 的烘焙半径保持一致：0.25 太保守，
+            // 小房间里会直接判定“无处可走”。
+            _agent.radius = 0.18f;
+            _agent.height = 1.6f;
             if (disableLegacySpatialExecutor)
             {
                 var legacy = GetComponent<SpatialActionExecutor>();
