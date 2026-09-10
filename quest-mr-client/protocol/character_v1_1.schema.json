@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qiyu.quest.protocol.v1_1.character",
+  "title": "Qiyu Quest Character Protocol v1.1",
+  "description": "CharacterState / BehaviorState / InteractionEvent / AutonomyRequest / WorldStateDelta。",
+  "$defs": {
+    "EmotionState": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "enum": ["neutral", "happy", "calm", "sad", "annoyed", "angry", "excited", "shy", "confused", "tired", "surprised", "curious", "embarrassed"]
+        },
+        "intensity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "valence": { "type": "number", "minimum": -1, "maximum": 1 },
+        "arousal": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "RelationshipState": {
+      "type": "object",
+      "properties": {
+        "tier": { "type": "string" },
+        "affinity": { "type": "number", "minimum": 0, "maximum": 100 },
+        "trust": { "type": "number", "minimum": 0, "maximum": 100 },
+        "familiarity": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "DrivesState": {
+      "type": "object",
+      "properties": {
+        "patience": { "type": "number", "minimum": 0, "maximum": 1 },
+        "energy": { "type": "number", "minimum": 0, "maximum": 1 },
+        "curiosity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "social_battery": { "type": "number", "minimum": 0, "maximum": 1 },
+        "stress": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "CharacterState": {
+      "type": "object",
+      "required": ["schema_version", "character_id"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "character_id": { "type": "string" },
+        "ts": { "type": "integer" },
+        "emotion": { "$ref": "#/$defs/EmotionState" },
+        "relationship": { "$ref": "#/$defs/RelationshipState" },
+        "drives": { "$ref": "#/$defs/DrivesState" },
+        "memory_context": {
+          "type": "object",
+          "properties": {
+            "salient_count": { "type": "integer", "minimum": 0 },
+            "last_interaction_age_s": { "type": "number", "minimum": 0 },
+            "has_unfinished_topic": { "type": "boolean" }
+          }
+        },
+        "attention": {
+          "type": "object",
+          "properties": {
+            "target_id": { "type": "string" },
+            "focus": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "speech": {
+          "type": "object",
+          "properties": {
+            "state": { "type": "string", "enum": ["idle", "listening", "thinking", "speaking", "interrupted"] },
+            "response_id": { "type": "string" }
+          }
+        },
+        "active_behavior": { "type": "string" },
+        "active_goal": { "type": "string" },
+        "active_target_id": { "type": "string" }
+      }
+    },
+    "BehaviorState": {
+      "type": "object",
+      "required": ["schema_version", "active_behavior"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "ts": { "type": "integer" },
+        "active_behavior": { "type": "string" },
+        "goal": { "type": "string" },
+        "target_id": { "type": "string" },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "policy_source": { "type": "string" },
+        "since_ms": { "type": "integer" },
+        "interruptible": { "type": "boolean" },
+        "locomotion": { "type": "object" },
+        "attention": { "type": "object" },
+        "motion": { "type": "object" },
+        "reflex": { "type": "object" },
+        "latency_ms": { "type": "object" }
+      }
+    },
+    "InteractionEvent": {
+      "type": "object",
+      "required": ["schema_version", "event_type"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "ts": { "type": "integer" },
+        "event_type": {
+          "type": "string",
+          "enum": ["user_near", "user_far", "user_left", "user_returned", "user_speech_start", "user_speech_end", "barge_in", "gaze_target", "point_target", "object_appeared", "object_lost", "collision", "danger", "occlusion", "stuck"]
+        },
+        "target_id": { "type": "string" },
+        "value": { "type": "number" },
+        "data": { "type": "object" },
+        "gesture": { "type": "string" },
+        "intent": { "type": "string" },
+        "direction": { "$ref": "qiyu.quest.protocol.v1.common#/$defs/Vec3" },
+        "distance_m": { "type": "number" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "emotion_hint": { "type": "string" },
+        "source": { "type": "string" }
+      }
+    },
+    "AutonomyRequest": {
+      "type": "object",
+      "required": ["schema_version", "reason"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "reason": { "type": "string" },
+        "urgency": { "type": "number", "minimum": 0, "maximum": 1 },
+        "social_priority": { "type": "number", "minimum": 0, "maximum": 1 },
+        "cooldown_s": { "type": "integer", "minimum": 5, "maximum": 3600 },
+        "world_scene_version": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "HumanMotionSnapshot": {
+      "type": "object",
+      "required": ["schema_version", "ts"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "ts": { "type": "integer" },
+        "sequence": { "type": "integer" },
+        "head_pose": { "type": "object" },
+        "left_hand_position": { "$ref": "qiyu.quest.protocol.v1.common#/$defs/Vec3" },
+        "right_hand_position": { "$ref": "qiyu.quest.protocol.v1.common#/$defs/Vec3" },
+        "left_hand_tracked": { "type": "boolean" },
+        "right_hand_tracked": { "type": "boolean" },
+        "body_tracked": { "type": "boolean" },
+        "body_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "gaze_direction": { "$ref": "qiyu.quest.protocol.v1.common#/$defs/Vec3" },
+        "gaze_target_id": { "type": "string" },
+        "gesture": { "type": "string" },
+        "facing_direction": { "$ref": "qiyu.quest.protocol.v1.common#/$defs/Vec3" },
+        "velocity": { "$ref": "qiyu.quest.protocol.v1.common#/$defs/Vec3" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "type": "string" }
+      }
+    },
+    "WorldStateDelta": {
+      "type": "object",
+      "required": ["base_scene_version", "scene_version", "changed"],
+      "properties": {
+        "schema_version": { "const": "1.1" },
+        "base_scene_version": { "type": "integer", "minimum": 0 },
+        "scene_version": { "type": "integer", "minimum": 0 },
+        "ts": { "type": "integer" },
+        "changed": {
+          "type": "object",
+          "properties": {
+            "anchors": { "type": "array" },
+            "objects": { "type": "array" },
+            "anchors_upsert": { "type": "array" },
+            "objects_upsert": { "type": "array" },
+            "anchors_remove": { "type": "array", "items": { "type": "string" } },
+            "objects_remove": { "type": "array", "items": { "type": "string" } },
+            "user": { "type": "object" },
+            "avatar": { "type": "object" },
+            "navmesh": { "type": "object" },
+            "interaction": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -502,3 +502,306 @@ def test_vision_request_closed_loop_reruns_same_question() -> None:
         assert final_speech["type"] == "agent.speech"
         assert final_speech["payload"]["text"] == "我看到桌上有杯子。"
         assert calls[-1].get("vision_objects")
+
+
+def test_character_state_behavior_state_and_interaction_are_acked() -> None:
+    """v1.1 上行状态与交互事件必须被校验、存储并 ACK。"""
+    app, gateway, client = _make_client()
+    with client.websocket_connect("/v1/quest/ws") as ws:
+        ws.send_text(json.dumps(_hello()))
+        session_id = json.loads(ws.receive_text())["session"]
+        messages = [
+            {
+                "v": "1.0.0", "id": "char-1", "type": "client.character_state",
+                "ts": 2100, "session": session_id,
+                "payload": {
+                    "schema_version": "1.1",
+                    "character_id": "qiyu",
+                    "emotion": {"label": "curious", "intensity": 0.4},
+                    "relationship": {"tier": "close_friend", "affinity": 72},
+                    "drives": {"patience": 0.7, "energy": 0.8},
+                },
+            },
+            {
+                "v": "1.0.0", "id": "behavior-1", "type": "client.behavior_state",
+                "ts": 2101, "session": session_id,
+                "payload": {
+                    "schema_version": "1.1",
+                    "active_behavior": "observe_object",
+                    "goal": "observe_object",
+                    "target_id": "cup-1",
+                    "priority": 2,
+                    "confidence": 0.78,
+                    "policy_source": "learned+utility",
+                },
+            },
+            {
+                "v": "1.0.0", "id": "event-1", "type": "client.interaction_event",
+                "ts": 2102, "session": session_id,
+                "payload": {
+                    "schema_version": "1.1",
+                    "event_type": "user_near",
+                    "target_id": "user",
+                    "value": 0.7,
+                },
+            },
+        ]
+        for message in messages:
+            ws.send_text(json.dumps(message))
+            ack = json.loads(ws.receive_text())
+            assert ack["type"] == "server.ack"
+            assert ack["payload"]["accepted"] is True
+        session = gateway.registry.get(session_id)
+        assert session is not None
+        assert session.character_state["emotion"]["label"] == "curious"
+        assert session.behavior_state["active_behavior"] == "observe_object"
+        assert session.last_interaction_event["event_type"] == "user_near"
+        assert session.interaction_events == 1
+
+
+def test_world_state_delta_merges_and_rejects_wrong_base() -> None:
+    app, gateway, client = _make_client()
+    with client.websocket_connect("/v1/quest/ws") as ws:
+        ws.send_text(json.dumps(_hello()))
+        session_id = json.loads(ws.receive_text())["session"]
+        full = {
+            "protocol_version": "1.0.0",
+            "schema_version": "1.1",
+            "ts": 2200,
+            "room_id": "room-delta",
+            "scene_version": 3,
+            "status": "ready",
+            "anchors": [{"id": "table-1", "label": "table"}],
+            "objects": [{"id": "cup-1", "label": "cup", "confidence": 0.9,
+                         "position": {"x": 1, "y": 0.8, "z": 2}}],
+            "user": {},
+            "avatar": {},
+        }
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "full-1", "type": "client.world_state",
+            "ts": 2200, "session": session_id, "payload": full,
+        }))
+        assert json.loads(ws.receive_text())["type"] == "server.ack"
+        delta = {
+            "schema_version": "1.1",
+            "base_scene_version": 3,
+            "scene_version": 4,
+            "ts": 2300,
+            "changed": {
+                "objects_remove": ["cup-1"],
+                "objects_upsert": [
+                    {"id": "phone-1", "label": "phone", "confidence": 0.8,
+                     "position": {"x": 0.5, "y": 0.8, "z": 1.5}}
+                ],
+            },
+        }
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "delta-1", "type": "client.world_state_delta",
+            "ts": 2300, "session": session_id, "payload": delta,
+        }))
+        ack = json.loads(ws.receive_text())
+        assert ack["type"] == "server.ack"
+        assert ack["payload"]["scene_version"] == 4
+        stored = gateway.world_states.get(session_id)
+        assert stored["objects"][0]["id"] == "phone-1"
+        # 错误 base 必须拒绝，要求全量重发，不能静默拼错几何。
+        bad = dict(delta)
+        bad["base_scene_version"] = 1
+        bad["scene_version"] = 5
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "delta-2", "type": "client.world_state_delta",
+            "ts": 2400, "session": session_id, "payload": bad,
+        }))
+        err = json.loads(ws.receive_text())
+        assert err["type"] == "server.error"
+        assert err["payload"]["code"] == "world_state_revision_mismatch"
+
+
+def test_autonomy_request_emits_optional_speech() -> None:
+    app, gateway, client = _make_client()
+    calls = []
+
+    async def _autonomy(session, request):
+        calls.append(request)
+        return {
+            "response_id": "auto-1",
+            "text": "你今天还没喝咖啡吧？",
+            "pieces": [{"text": "你今天还没喝咖啡吧？", "type": "question", "delay": 0}],
+            "avatar_intent": {
+                "schema_version": "1.1", "goal": "speak", "target": "user",
+                "attention": "user", "emotion": "curious", "speaking": True,
+            },
+            "spatial_action": None,
+        }
+
+    gateway.on_autonomy_request = _autonomy
+    with client.websocket_connect("/v1/quest/ws") as ws:
+        ws.send_text(json.dumps(_hello()))
+        session_id = json.loads(ws.receive_text())["session"]
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "tts-off-auto", "type": "client.tts_config",
+            "ts": 2499, "session": session_id, "payload": {"enabled": False},
+        }))
+        assert json.loads(ws.receive_text())["type"] == "server.ack"
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "auto-req-1", "type": "client.autonomy_request",
+            "ts": 2500, "session": session_id,
+            "payload": {
+                "schema_version": "1.1",
+                "reason": "long_silence_high_affinity",
+                "urgency": 0.2,
+                "social_priority": 0.7,
+                "cooldown_s": 90,
+            },
+        }))
+        result = json.loads(ws.receive_text())
+        assert result["type"] == "server.autonomy_result"
+        assert result["payload"]["accepted"] is True
+        speech = json.loads(ws.receive_text())
+        assert speech["type"] == "agent.speech"
+        assert "咖啡" in speech["payload"]["text"]
+        intent = json.loads(ws.receive_text())
+        assert intent["type"] == "avatar.intent"
+        assert intent["payload"]["goal"] == "speak"
+        assert calls and calls[0]["reason"] == "long_silence_high_affinity"
+
+
+def test_duplicate_sequence_is_ignored() -> None:
+    app, gateway, client = _make_client()
+    with client.websocket_connect("/v1/quest/ws") as ws:
+        ws.send_text(json.dumps(_hello()))
+        session_id = json.loads(ws.receive_text())["session"]
+        message = {
+            "v": "1.0.0", "id": "dup-1", "type": "client.heartbeat",
+            "ts": 2600, "session": session_id, "seq": 1, "payload": {},
+        }
+        ws.send_text(json.dumps(message))
+        assert json.loads(ws.receive_text())["type"] == "server.heartbeat"
+        ws.send_text(json.dumps(message))
+        # 再发一个合法新事件，确保服务端已处理完前面的重复包。
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "dup-2", "type": "client.heartbeat",
+            "ts": 2601, "session": session_id, "seq": 2, "payload": {},
+        }))
+        assert json.loads(ws.receive_text())["type"] == "server.heartbeat"
+        # 重复事件不执行业务；只保留原 session。
+        session = gateway.registry.get(session_id)
+        assert session is not None
+        assert session.duplicate_client_events == 1
+
+
+def test_planner_v1_1_goal_schema() -> None:
+    async def _fake_llm(system_prompt, user_prompt, temperature):
+        return json.dumps({
+            "avatar_intent": {
+                "goal": "observe_object",
+                "target": "cup-1",
+                "attention": "cup-1",
+                "emotion": "curious",
+                "emotion_intensity": 0.55,
+                "behavior_style": "casual",
+                "urgency": 0.1,
+                "social_priority": 0.5,
+                "duration_hint_ms": 3000,
+                "speech_act": "observe",
+                "priority": 2,
+                "speaking": False,
+                "spatial_hint": {
+                    "target_id": "cup-1",
+                    "desired_distance_m": 0.7,
+                    "face_target": True,
+                },
+            },
+        })
+
+    planner = QuestResponsePlanner(llm_complete=_fake_llm)
+    result = asyncio.run(planner.plan(
+        reply_text="那个杯子挺有意思。",
+        world_state={
+            "anchors": [],
+            "objects": [{"id": "cup-1", "label": "cup",
+                         "position": {"x": 1, "y": 0.8, "z": 2}}],
+            "user": {"head": {"position": {"x": 0, "y": 1.6, "z": 0}}},
+        },
+    ))
+    intent = result["avatar_intent"]
+    assert result["source"] == "llm"
+    assert intent.goal == "observe_object"
+    assert intent.target == "cup-1"
+    assert intent.attention == "cup-1"
+    assert intent.emotion == "curious"
+    assert intent.spatial_hint.target_id == "cup-1"
+    # 兼容旧客户端：legacy action 由 goal 确定性映射，不参与新运行时。
+    assert intent.action == "look_at_object"
+
+
+def test_human_motion_state_is_stored_without_ack_storm() -> None:
+    app, gateway, client = _make_client()
+    with client.websocket_connect("/v1/quest/ws") as ws:
+        ws.send_text(json.dumps(_hello()))
+        session_id = json.loads(ws.receive_text())["session"]
+        motion = {
+            "schema_version": "1.1",
+            "ts": 2700,
+            "sequence": 7,
+            "head_pose": {
+                "position": {"x": 0, "y": 1.6, "z": 0},
+                "rotation": {"x": 0, "y": 0, "z": 0, "w": 1},
+            },
+            "left_hand_position": {"x": -0.2, "y": 1.2, "z": 0.3},
+            "right_hand_position": {"x": 0.2, "y": 1.3, "z": 0.4},
+            "left_hand_tracked": True,
+            "right_hand_tracked": True,
+            "body_tracked": False,
+            "gaze_direction": {"x": 0, "y": 0, "z": 1},
+            "gesture": "wave",
+            "confidence": 0.8,
+        }
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "motion-1", "type": "client.human_motion_state",
+            "ts": 2700, "session": session_id, "payload": motion,
+        }))
+        # 5–15Hz 压缩状态不逐包 ACK；随后发 heartbeat 以确认 session 正常。
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "hb-motion", "type": "client.heartbeat",
+            "ts": 2701, "session": session_id, "payload": {},
+        }))
+        assert json.loads(ws.receive_text())["type"] == "server.heartbeat"
+        session = gateway.registry.get(session_id)
+        assert session is not None
+        assert session.human_motion_updates == 1
+        assert session.human_motion_state["gesture"] == "wave"
+
+
+def test_user_body_is_stored_without_server_error() -> None:
+    """Quest 端既有 client.user_body 必须兼容，不能再刷 unsupported_type。"""
+    app, gateway, client = _make_client()
+    with client.websocket_connect("/v1/quest/ws") as ws:
+        ws.send_text(json.dumps(_hello()))
+        session_id = json.loads(ws.receive_text())["session"]
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "body-1", "type": "client.user_body",
+            "ts": 2800, "session": session_id,
+            "payload": {
+                "ts": 2800,
+                "source": "headset_hands_controllers",
+                "head": {"position": {"x": 0, "y": 1.6, "z": 0}},
+                "left_hand": {"position": {"x": -0.2, "y": 1.2, "z": 0.3}},
+                "right_hand": {"position": {"x": 0.2, "y": 1.3, "z": 0.4}},
+                "left_hand_source": "hand",
+                "right_hand_source": "hand",
+                "body_height_m": 1.72,
+                "lean_deg": 4.2,
+                "confidence": 0.95,
+                "model": "5point_head_hands",
+            },
+        }))
+        ws.send_text(json.dumps({
+            "v": "1.0.0", "id": "hb-body", "type": "client.heartbeat",
+            "ts": 2801, "session": session_id, "payload": {},
+        }))
+        assert json.loads(ws.receive_text())["type"] == "server.heartbeat"
+        session = gateway.registry.get(session_id)
+        assert session is not None
+        assert session.user_body_updates == 1
+        assert session.user_body["model"] == "5point_head_hands"

@@ -6,6 +6,53 @@
 > 真机 MRUK/Passthrough/麦克风/导航部分因当前未连接 Quest 设备，尚未做真机验收，
 > 本文严格区分“已实测”与“待真机验证”。
 
+## 2026-09-10 · Character Behavior Runtime 更新
+
+> 真机验收结果、OOD/长时序评估、NavMesh 修复与房间空间推导，
+> 见 [docs/P7_ACCEPTANCE_REPORT.md](docs/P7_ACCEPTANCE_REPORT.md)。
+
+本轮在原有 P0–P6 基础上完成：
+
+- Protocol v1.1 兼容扩展：`AvatarIntent` 高层 goal/target/attention、
+  `CharacterState`、`BehaviorState`、`InteractionEvent`、`AutonomyRequest`、
+  `WorldState delta`、`seq/ack`；
+- Quest 本地 Character Behavior Runtime（8 Hz 候选行为仲裁 + Utility + 滞回 + 目标锁定）；
+- 60 Hz Reflex Layer（碰撞、突然靠近、遮挡、打断、障碍前向探测）；
+- CharacterState（情绪/关系/耐心/精力/社交电量）与 WorldModel；
+- Motion Library + Locomotion + Attention + Animation + 程序化低精度兜底；
+- 自动仿真数据生成与 x99 CUDA 训练：
+  - 2,000 episodes / 24,000 决策组 / 640,600 候选样本；
+  - 2×V100，40 epochs 约 30 秒；
+  - top-1 0.661 / top-3 0.915 / 硬负样本拒绝率 0.998 / 参数 MAE 0.048；
+  - 15 类交互场景自动化测试合理率 1.00；
+- 后端测试从 16 项扩展到 22 项，全部通过。
+
+### 2026-09-10 追加：OOD / Long-Horizon / Human Motion
+
+- OOD 泛化：IID 500 episodes、OOD 2,000 episodes、Long-Horizon 500 episodes；
+- OOD Top-1 0.965 vs IID 0.971，Δ=−0.006；Top-3 1.000；硬负样本拒绝率 1.000；
+- Invalid action rate 0.000；Action contradiction rate 0.000；
+- Long-Horizon 抖动：action_oscillation 0.027、walk_stop_walk 0.0005、look_ABA 0.016；
+- 结论：当前轻量 Behavior Scorer 不因 OOD 明显崩溃，暂不升级 Transformer/VLA；
+- 已新增 Human Motion Capture、Motion Understanding、HumanInteractionEvent、
+  SharedAttention、InteractionState、Human→Avatar 互动、HumanMotionSync；
+- 已接入真实 Meta API：`OVRHand`、`OVRSkeleton`、`OVRBody.BodyState`、`OVREyeGaze`；
+- 验收模型已确认是 aplaybox MMD 模型（原神茜特菈莉），许可禁止二次配布/商业用途，
+  本地接入见 `docs/ACCEPTANCE_AVATAR.md`；
+- 后端测试扩展到 22 项，全部通过。
+
+仍未完成：
+
+- Quest 真机验收（MRUK/深度/麦克风/动画/NavMesh/性能）；
+- 专业 Walk/Run/Idle/手势动作资产导入；
+- 真机行为日志回流与增量训练。
+
+详见：
+
+- `docs/character_behavior_architecture.md`
+- `docs/protocol_character_v1_1.md`
+- `behavior_policy/README.md`
+
 ## 1. 实际分支结构
 
 ```text
@@ -208,7 +255,7 @@ Quest 规划器按设计降级为确定性 AvatarIntent，且不编造 SpatialAc
 # 后端协议/语音/规划器测试
 cd D:\Codex projects\ai-companion-codex\ai-companion\quest-mr-client\backend
 python tests/run_tests.py
-# → ALL PASS (16)
+# → ALL PASS (22)
 
 # 真实进程级联调（uvicorn + 现有 Qiyu app + MiniMind-O）
 python tests/smoke_live_gateway.py

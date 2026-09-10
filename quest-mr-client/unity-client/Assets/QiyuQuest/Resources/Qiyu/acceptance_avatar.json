@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "source": "aplaybox",
+  "url": "https://www.aplaybox.com/details/model/gF6QUvbECNUA",
+  "work_uuid": "gF6QUvbECNUA",
+  "work_id": 73799,
+  "name": "【原神】茜特菈莉「星与烟帷的夜语」",
+  "format": "MMD",
+  "model_provider": "miHoYo",
+  "model_modifier": "观海",
+  "allow_modify": true,
+  "allow_commercial": false,
+  "allow_redistribute": false,
+  "forbidden": [
+    "二次配布",
+    "拆取部件改造其他模型",
+    "18禁",
+    "极端宗教宣传",
+    "血腥恐怖猎奇",
+    "人身攻击",
+    "商业用途"
+  ],
+  "download_requires_login": true,
+  "asset_committed_to_repo": false
+}

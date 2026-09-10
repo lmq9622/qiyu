@@ -18,6 +18,18 @@ from qiyu_quest_gateway.binary_frame import (
     unpack_frame,
 )
 from qiyu_quest_gateway.planner import QuestResponsePlanner
+from qiyu_quest_gateway.models import (
+    AutonomyRequest,
+    AvatarIntent,
+    BehaviorState,
+    CHARACTER_SCHEMA_VERSION,
+    CharacterState,
+    HumanMotionSnapshot,
+    InteractionEvent,
+    SpatialAction,
+    WorldInteraction,
+    WorldState,
+)
 from qiyu_quest_gateway.protocol import (
     PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -35,6 +47,16 @@ __all__ = [
     "Envelope",
     "QuestWebSocketGateway",
     "QuestResponsePlanner",
+    "AutonomyRequest",
+    "AvatarIntent",
+    "BehaviorState",
+    "CHARACTER_SCHEMA_VERSION",
+    "CharacterState",
+    "HumanMotionSnapshot",
+    "InteractionEvent",
+    "SpatialAction",
+    "WorldInteraction",
+    "WorldState",
     "AudioError",
     "AudioTurnBuffer",
     "BinaryFrame",

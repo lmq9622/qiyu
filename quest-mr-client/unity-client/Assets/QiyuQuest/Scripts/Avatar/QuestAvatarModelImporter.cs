@@ -106,6 +106,8 @@ namespace Qiyu.Quest.Avatar
             var vrmType = Type.GetType("UniVRM10.Vrm10Importer, VRM10")
                           ?? Type.GetType("VRM.VRMImporterContext, VRM");
             var gltfType = Type.GetType("GLTFast.GltfImport, glTFast");
+            var mmdType = Type.GetType("MMD4Mecanim.MMD4MecanimModel, MMD4Mecanim")
+                          ?? Type.GetType("MMD.MMDEngine, MMDPlayer");
             if (extension == ".vrm" && vrmType == null)
             {
                 Fail("检测到 VRM 文件，但工程未安装 UniVRM。请安装 com.vrm.vrm 后再导入。");
@@ -114,6 +116,12 @@ namespace Qiyu.Quest.Avatar
             if ((extension == ".glb" || extension == ".gltf") && gltfType == null)
             {
                 Fail("检测到 GLB/GLTF 文件，但工程未安装 glTFast。请安装 com.unity.cloud.gltfast 后再导入。");
+                return;
+            }
+            if ((extension == ".pmx" || extension == ".pmd") && mmdType == null)
+            {
+                Fail("检测到 MMD 文件（.pmx/.pmd），但工程未安装 MMD4Mecanim/MMDPlayer。" +
+                     "请先安装真实 MMD 导入器，并按 docs/ACCEPTANCE_AVATAR.md 的许可要求本地导入。");
                 return;
             }
             // 预留：安装导入器后在此处加载，并把结果挂到 avatarRoot。

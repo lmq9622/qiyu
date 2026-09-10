@@ -1,0 +1,152 @@
+{
+  "sources": [
+    "behavior_policy/artifacts/gen_iid.json",
+    "behavior_policy/artifacts/gen_ood_1.json",
+    "behavior_policy/artifacts/gen_ood_2.json",
+    "behavior_policy/artifacts/gen_ood_3.json",
+    "behavior_policy/artifacts/gen_ood_4.json",
+    "behavior_policy/artifacts/gen_long_1.json",
+    "behavior_policy/artifacts/gen_long_2.json"
+  ],
+  "counts": {
+    "iid_groups": 6000,
+    "ood_groups": 69605,
+    "long_steps": 17506
+  },
+  "iid": {
+    "action_contradiction_rate": 0.0,
+    "goal_abandonment_rate": 0.118,
+    "hard_negative_rejection": 1.0,
+    "invalid_action_rate": 0.0,
+    "top1": 0.971,
+    "top3": 0.9996666666666667
+  },
+  "ood": {
+    "action_contradiction_rate": 0.0,
+    "goal_abandonment_rate": 0.2185618849220602,
+    "hard_negative_rejection": 1.0,
+    "invalid_action_rate": 0.0,
+    "top1": 0.9645427770993463,
+    "top3": 1.0
+  },
+  "delta_ood_minus_iid": {
+    "top1": -0.0064572229006536475,
+    "top3": 0.0003333333333332966,
+    "hard_negative_rejection": 0.0,
+    "invalid_action_rate": 0.0,
+    "goal_abandonment_rate": 0.1005618849220602,
+    "action_contradiction_rate": 0.0
+  },
+  "params": {
+    "iid": {
+      "desired_distance": {
+        "mae": 0.13893237709999084,
+        "p50": 0.1038968488574028,
+        "p90": 0.3118054270744324,
+        "p95": 0.3673016428947449,
+        "rmse": 0.17828619480133057
+      },
+      "gaze_weight": {
+        "mae": 0.03440241143107414,
+        "p50": 0.023694008588790894,
+        "p90": 0.076612189412117,
+        "p95": 0.10257507860660553,
+        "rmse": 0.04987921565771103
+      },
+      "gesture_probability": {
+        "mae": 0.04082600027322769,
+        "p50": 0.025616377592086792,
+        "p90": 0.09687851369380951,
+        "p95": 0.12513737380504608,
+        "rmse": 0.05910738557577133
+      },
+      "look_away_rate": {
+        "mae": 0.011960141360759735,
+        "p50": 0.009009361267089844,
+        "p90": 0.026104453951120377,
+        "p95": 0.03426742181181908,
+        "rmse": 0.016037454828619957
+      },
+      "speech_urge": {
+        "mae": 0.025546971708536148,
+        "p50": 0.020132023841142654,
+        "p90": 0.048538483679294586,
+        "p95": 0.07329111546278,
+        "rmse": 0.03739894926548004
+      },
+      "speed_scale": {
+        "mae": 0.042160335928201675,
+        "p50": 0.031579576432704926,
+        "p90": 0.09615429490804672,
+        "p95": 0.10976721346378326,
+        "rmse": 0.056166451424360275
+      }
+    },
+    "ood": {
+      "desired_distance": {
+        "mae": 0.10155045249541594,
+        "p50": 0.08647683227009133,
+        "p90": 0.20921263149539746,
+        "p95": 0.23746233400013347,
+        "rmse": 0.12476486438305572
+      },
+      "gaze_weight": {
+        "mae": 0.039955937178993726,
+        "p50": 0.03028518837267756,
+        "p90": 0.08604714359139995,
+        "p95": 0.11169716236740511,
+        "rmse": 0.05290434259115027
+      },
+      "gesture_probability": {
+        "mae": 0.06330439533887645,
+        "p50": 0.040055327352879505,
+        "p90": 0.151527150562205,
+        "p95": 0.18474022831162212,
+        "rmse": 0.08762950647961398
+      },
+      "look_away_rate": {
+        "mae": 0.016074114925204042,
+        "p50": 0.011557555115391627,
+        "p90": 0.0380170756797237,
+        "p95": 0.050886705943470445,
+        "rmse": 0.021913979235959204
+      },
+      "speech_urge": {
+        "mae": 0.02468996592611021,
+        "p50": 0.02350660915522708,
+        "p90": 0.04055692808946507,
+        "p95": 0.047227152233486946,
+        "rmse": 0.030622763775953247
+      },
+      "speed_scale": {
+        "mae": 0.08211514813342867,
+        "p50": 0.06505253581204005,
+        "p90": 0.16084196596200948,
+        "p95": 0.22783814325161206,
+        "rmse": 0.11235797553665806
+      }
+    }
+  },
+  "long_horizon": {
+    "action_contradiction_rate": 0.0,
+    "action_oscillation_rate": 0.027133554209985148,
+    "behavior_switching_rate": 0.11933051525191363,
+    "cancellation_response_rate": 1.0,
+    "interruption_response_rate": 0.663193114714031,
+    "look_aba_rate": 0.015708899805780874,
+    "reflex_override_rate": 0.339540728892951,
+    "replan_success_rate": 1.0,
+    "stale_goal_rate": 0.029304238546783958,
+    "steps": 8753.252370615788,
+    "target_switching_rate": 0.20324460185079402,
+    "walk_stop_walk_rate": 0.0004569861761681709
+  },
+  "arbitration": {
+    "switch_margin": 0.08,
+    "hard_penalty": 0.35
+  },
+  "recommendation": {
+    "continue_training": false,
+    "reason": "当前轻量 Behavior Scorer + Utility + Reflex 指标稳定，保持 v1 并优先真机验证"
+  }
+}

@@ -1,0 +1,1007 @@
+{
+  "call_character": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "listen_user",
+        "target": "user"
+      }
+    ]
+  },
+  "user_approach": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "observe_user",
+        "target": "user"
+      }
+    ]
+  },
+  "user_leave": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.0,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 1,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 2,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 3,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 4,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 5,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 6,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 7,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 8,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 9,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 10,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 11,
+        "behavior": "idle",
+        "target": ""
+      }
+    ]
+  },
+  "user_return": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "observe_user",
+        "target": "user"
+      }
+    ]
+  },
+  "user_silence": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.0,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 1,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 2,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 3,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 4,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 5,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 6,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 7,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 8,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 9,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 10,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 11,
+        "behavior": "idle",
+        "target": ""
+      }
+    ]
+  },
+  "point_object": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 1,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 2,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 3,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 4,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 5,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 6,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 7,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 8,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 9,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 10,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      },
+      {
+        "step": 11,
+        "behavior": "point_at_object",
+        "target": "cup_1"
+      }
+    ]
+  },
+  "look_object": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 1,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 2,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 3,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 4,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 5,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 6,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 7,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 8,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 9,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 10,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 11,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      }
+    ]
+  },
+  "follow_me": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "follow_user",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "follow_user",
+        "target": "user"
+      }
+    ]
+  },
+  "sit_here": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 1,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 2,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 3,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 4,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 5,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 6,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 7,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 8,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 9,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 10,
+        "behavior": "sit",
+        "target": "chair_1"
+      },
+      {
+        "step": 11,
+        "behavior": "sit",
+        "target": "chair_1"
+      }
+    ]
+  },
+  "dont_come": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "maintain_distance",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "maintain_distance",
+        "target": "user"
+      }
+    ]
+  },
+  "interrupt": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "listen_user",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "listen_user",
+        "target": "user"
+      }
+    ]
+  },
+  "emotion_shift": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 1,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 2,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 3,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 4,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 5,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 6,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 7,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 8,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 9,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 10,
+        "behavior": "observe_user",
+        "target": "user"
+      },
+      {
+        "step": 11,
+        "behavior": "observe_user",
+        "target": "user"
+      }
+    ]
+  },
+  "two_targets": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 1,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 2,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 3,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 4,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 5,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 6,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 7,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 8,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 9,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 10,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 11,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      }
+    ]
+  },
+  "target_missing": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.08333333333333333,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 1,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 2,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 3,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 4,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 5,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 6,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 7,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 8,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 9,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 10,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      },
+      {
+        "step": 11,
+        "behavior": "observe_object",
+        "target": "phone_1"
+      }
+    ]
+  },
+  "network_stale": {
+    "reasonable_rate": 1.0,
+    "switch_rate": 0.0,
+    "missing_target_actions": 0,
+    "samples": [
+      {
+        "step": 0,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 1,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 2,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 3,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 4,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 5,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 6,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 7,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 8,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 9,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 10,
+        "behavior": "idle",
+        "target": ""
+      },
+      {
+        "step": 11,
+        "behavior": "idle",
+        "target": ""
+      }
+    ]
+  }
+}

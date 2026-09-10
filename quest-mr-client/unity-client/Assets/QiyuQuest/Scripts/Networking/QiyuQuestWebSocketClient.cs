@@ -39,6 +39,9 @@ namespace Qiyu.Quest.Networking
         private float _reconnectDelay;
         private bool _connecting;
         private bool _quitting;
+        private int _clientSequence;
+        private int _lastServerSequence;
+        private int _lastAckedServerSequence;
 
         public event Action<QuestEnvelope> OnMessage;
         public event Action<bool> OnConnectionChanged;
@@ -46,6 +49,8 @@ namespace Qiyu.Quest.Networking
         public event Action<JObject> OnAgentSpeech;
         public event Action<JObject> OnAvatarIntent;
         public event Action<JObject> OnSpatialAction;
+        public event Action<JObject> OnCharacterState;
+        public event Action<JObject> OnAutonomyResult;
         public event Action<JObject> OnServerAck;
         /// <summary>二进制帧：payload, kind, seq</summary>
         public event Action<byte[], byte, uint> OnBinaryFrame;
@@ -54,6 +59,8 @@ namespace Qiyu.Quest.Networking
         public bool HandshakeDone => _handshakeDone;
         public string SessionId => _sessionId;
         public string ServerUrl => serverUrl;
+        public int ClientSequence => _clientSequence;
+        public int LastServerSequence => _lastServerSequence;
 
         private async void Start()
         {
@@ -152,14 +159,29 @@ namespace Qiyu.Quest.Networking
             _socket = null;
             _sessionId = "";
             _handshakeDone = false;
+            _clientSequence = 0;
+            _lastServerSequence = 0;
+            _lastAckedServerSequence = 0;
         }
 
         public Task SendAsync(QuestEnvelope envelope)
         {
+            if (envelope == null)
+            {
+                return Task.CompletedTask;
+            }
             if (_socket == null || _socket.State != WebSocketState.Open)
             {
                 Debug.LogWarning("[QuestWS] 连接未打开，丢弃消息");
                 return Task.CompletedTask;
+            }
+            if (envelope.seq <= 0)
+            {
+                envelope.seq = ++_clientSequence;
+            }
+            if (envelope.ack <= 0)
+            {
+                envelope.ack = _lastServerSequence;
             }
             return _socket.SendText(envelope.ToJson());
         }
@@ -186,6 +208,94 @@ namespace Qiyu.Quest.Networking
                 worldState ?? new JObject(), _sessionId));
         }
 
+        public Task SendWorldStateDeltaAsync(JObject delta)
+        {
+            return SendAsync(new QuestEnvelope("client.world_state_delta",
+                delta ?? new JObject(), _sessionId));
+        }
+
+        public Task SendBehaviorStateAsync(JObject behaviorState)
+        {
+            return SendAsync(new QuestEnvelope("client.behavior_state",
+                behaviorState ?? new JObject(), _sessionId));
+        }
+
+        public Task SendCharacterStateAsync(JObject characterState)
+        {
+            return SendAsync(new QuestEnvelope("client.character_state",
+                characterState ?? new JObject(), _sessionId));
+        }
+
+        public Task SendInteractionEventAsync(string eventType, string targetId = "",
+                                              float value = 0f, JObject data = null)
+        {
+            var payload = new JObject
+            {
+                ["schema_version"] = "1.1",
+                ["ts"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ["event_type"] = eventType ?? "",
+                ["target_id"] = targetId ?? "",
+                ["value"] = value,
+                ["data"] = data ?? new JObject()
+            };
+            return SendAsync(new QuestEnvelope("client.interaction_event",
+                payload, _sessionId));
+        }
+
+        public Task SendHumanMotionStateAsync(JObject motionState)
+        {
+            return SendAsync(new QuestEnvelope("client.human_motion_state",
+                motionState ?? new JObject(), _sessionId));
+        }
+
+        public Task SendGestureEventAsync(string gesture, string intent,
+                                          string targetId, float confidence,
+                                          Vector3 direction, float distance,
+                                          string emotionHint = "")
+        {
+            var payload = new JObject
+            {
+                ["schema_version"] = "1.1",
+                ["ts"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ["event_type"] = "gesture",
+                ["target_id"] = targetId ?? "",
+                ["value"] = confidence,
+                ["gesture"] = gesture ?? "",
+                ["intent"] = intent ?? "",
+                ["confidence"] = Mathf.Clamp01(confidence),
+                ["distance_m"] = distance,
+                ["emotion_hint"] = emotionHint ?? "",
+                ["source"] = "local_motion_understanding",
+                ["direction"] = new JObject
+                {
+                    ["x"] = direction.x,
+                    ["y"] = direction.y,
+                    ["z"] = direction.z
+                },
+                ["data"] = new JObject()
+            };
+            return SendAsync(new QuestEnvelope("client.interaction_event",
+                payload, _sessionId));
+        }
+
+        public Task SendAutonomyRequestAsync(string reason, float urgency = 0f,
+                                             float socialPriority = 0.5f,
+                                             int cooldownSeconds = 90,
+                                             int sceneVersion = 0)
+        {
+            var payload = new JObject
+            {
+                ["schema_version"] = "1.1",
+                ["reason"] = reason ?? "",
+                ["urgency"] = Mathf.Clamp01(urgency),
+                ["social_priority"] = Mathf.Clamp01(socialPriority),
+                ["cooldown_s"] = Mathf.Clamp(cooldownSeconds, 5, 3600),
+                ["world_scene_version"] = Mathf.Max(0, sceneVersion)
+            };
+            return SendAsync(new QuestEnvelope("client.autonomy_request",
+                payload, _sessionId));
+        }
+
         public Task SendBinaryAsync(byte[] data)
         {
             if (data == null || data.Length == 0)
@@ -203,11 +313,16 @@ namespace Qiyu.Quest.Networking
         private void HandleOpen()
         {
             Debug.Log($"[QuestWS] 已连接 {serverUrl}");
+            _clientSequence = 0;
+            _lastServerSequence = 0;
+            _lastAckedServerSequence = 0;
             OnConnectionChanged?.Invoke(true);
             var capabilities = new JArray
             {
                 "world_state_v1", "avatar_intent_v1", "spatial_action_v1",
-                "user.text", "barge_in"
+                "character_schema_v1_1", "behavior_state_v1_1",
+                "interaction_events_v1_1", "autonomy_request_v1_1",
+                "world_state_delta_v1_1", "user.text", "barge_in"
             };
             var payload = new JObject
             {
@@ -254,6 +369,21 @@ namespace Qiyu.Quest.Networking
 
         private void Dispatch(QuestEnvelope envelope)
         {
+            if (envelope.seq > 0)
+            {
+                if (envelope.seq < _lastServerSequence)
+                {
+                    Debug.LogWarning(
+                        $"[QuestWS] 丢弃乱序旧消息 {envelope.type} seq={envelope.seq} " +
+                        $"last={_lastServerSequence}");
+                    return;
+                }
+                _lastServerSequence = envelope.seq;
+            }
+            if (envelope.ack > _lastAckedServerSequence)
+            {
+                _lastAckedServerSequence = envelope.ack;
+            }
             switch (envelope.type)
             {
                 case "server.hello_ack":
@@ -273,6 +403,12 @@ namespace Qiyu.Quest.Networking
                     break;
                 case "spatial.action":
                     OnSpatialAction?.Invoke(envelope.payload);
+                    break;
+                case "character.state":
+                    OnCharacterState?.Invoke(envelope.payload);
+                    break;
+                case "server.autonomy_result":
+                    OnAutonomyResult?.Invoke(envelope.payload);
                     break;
                 case "server.ack":
                     OnServerAck?.Invoke(envelope.payload);
@@ -335,6 +471,9 @@ namespace Qiyu.Quest.Networking
             Debug.Log($"[QuestWS] 已断开: {code}");
             _sessionId = "";
             _handshakeDone = false;
+            _clientSequence = 0;
+            _lastServerSequence = 0;
+            _lastAckedServerSequence = 0;
             OnConnectionChanged?.Invoke(false);
             ScheduleReconnect();
         }

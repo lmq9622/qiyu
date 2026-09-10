@@ -31,6 +31,16 @@
     "reply_to": {
       "type": "string"
     },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "会话内单调递增序号；重复/乱序事件不重复执行"
+    },
+    "ack": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "已确认的对端最大连续序号"
+    },
     "payload": {
       "type": "object"
     }

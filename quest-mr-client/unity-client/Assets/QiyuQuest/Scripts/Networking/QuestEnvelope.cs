@@ -16,16 +16,21 @@ namespace Qiyu.Quest.Networking
         public long ts;
         public string session = "";
         public string reply_to = "";
+        public int seq;
+        public int ack;
         public JObject payload = new JObject();
 
         public QuestEnvelope() { }
 
-        public QuestEnvelope(string type, JObject payload, string session = "", string replyTo = "")
+        public QuestEnvelope(string type, JObject payload, string session = "",
+                             string replyTo = "", int seq = 0, int ack = 0)
         {
             this.type = type;
             this.payload = payload ?? new JObject();
             this.session = session;
             this.reply_to = replyTo;
+            this.seq = Math.Max(0, seq);
+            this.ack = Math.Max(0, ack);
             this.ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
 
@@ -47,7 +52,7 @@ namespace Qiyu.Quest.Networking
 
         public QuestEnvelope Reply(string replyType, JObject replyPayload)
         {
-            return new QuestEnvelope(replyType, replyPayload, session, id);
+            return new QuestEnvelope(replyType, replyPayload, session, id, 0, seq);
         }
     }
 }

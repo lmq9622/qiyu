@@ -2,6 +2,13 @@
 
 Quest 3/3S MR 客户端源码（与 `D:\UnityProjects\QiyuQuestProject\Assets\QiyuQuest` 同步）。
 
+> 角色实时行为系统见
+> [`../docs/character_behavior_architecture.md`](../docs/character_behavior_architecture.md)，
+> 协议冻结见 [`../docs/protocol_character_v1_1.md`](../docs/protocol_character_v1_1.md)，
+> Behavior Policy 训练见 [`../behavior_policy/README.md`](../behavior_policy/README.md)。
+> P7 真机验收见 [`../docs/P7_quest_acceptance.md`](../docs/P7_quest_acceptance.md)。
+> 验收模型许可与导入见 [`../docs/ACCEPTANCE_AVATAR.md`](../docs/ACCEPTANCE_AVATAR.md)。
+
 ## 目录
 
 ```text
@@ -26,6 +33,28 @@ Assets/QiyuQuest/
 │   ├── AvatarIntentRouter.cs              # avatar.intent / spatial.action 分发
 │   ├── BlendShapeAvatarDriver.cs          # 情绪 → BlendShape，音频 → 口型
 │   └── AvatarLookController.cs            # 头部/上身看向
+├── Scripts/Behavior/
+│   ├── CharacterBehaviorRuntime.cs        # 5–10 Hz 行为仲裁
+│   ├── CharacterStateStore.cs             # 情绪/关系/耐心/精力/社交电量
+│   ├── CharacterWorldModel.cs             # WorldState → 行为快照
+│   ├── CharacterReflexLayer.cs            # 60 Hz 碰撞/靠近/遮挡/打断
+│   ├── BehaviorCandidateGenerator.cs      # 行为 × 目标候选
+│   ├── TinyBehaviorPolicy.cs              # 本地轻量策略推理
+│   ├── CharacterLocomotionController.cs   # NavMesh 移动/到达/卡住恢复
+│   ├── CharacterAttentionController.cs    # 自然视线与回看
+│   ├── CharacterAnimationController.cs    # Motion Library → Animator
+│   ├── MotionLibrary.cs                   # 动作库
+│   ├── ProceduralMotionFallback.cs        # 无动作资产时的低精度兜底
+│   ├── HumanMotionCapture.cs              # OVRHand/OVRBody/OVREyeGaze → HumanMotionState
+│   ├── MotionUnderstanding.cs             # 连续 motion → 高层 HumanInteractionEvent
+│   ├── HumanAvatarInteractionController.cs# 手势 → 角色回应
+│   ├── SharedAttentionController.cs       # 人机共享注意力
+│   ├── InteractionStateController.cs      # interrupt/cancel/resume/replan
+│   ├── HumanMotionSync.cs                 # 5–15Hz 压缩状态同步
+│   └── ICharacterBehaviorPolicy.cs        # 可升级策略接口
+├── Resources/Qiyu/
+│   ├── motion_library.json                # 动作槽位/过渡/优先级
+│   └── behavior_policy_v1.json            # x99 CUDA 训练权重
 └── Scripts/Spatial/
     ├── RoomNavMeshBuilder.cs              # MRUK 语义 → 运行时 NavMesh
     ├── SpatialActionExecutor.cs           # NavMeshAgent 执行高层动作
@@ -69,5 +98,7 @@ $env:ANDROID_NDK_ROOT='D:\Unity\Hub\Editor\6000.6.0f1\Editor\Data\PlaybackEngine
 5. 说一句话，确认 `server.voice_transcript` → `agent.speech` → TTS 播放
 6. TTS 播放中插话，确认 barge-in
 7. 让角色靠近/看向桌子，确认 NavMesh 与避障
+8. 确认 `client.behavior_state` 上报，角色在用户沉默时出现自主观察/换位而非静止假死
+9. 确认用户突然靠近、碰撞、遮挡、打断时 Reflex 立即覆盖
 
 > 当前机器未连接 Quest，以上真机项尚未验收；不要把源码完成等同于真机通过。

@@ -461,6 +461,7 @@ namespace Qiyu.Quest.Editor
             var interactionState = runtimeRoot.AddComponent<InteractionStateController>();
             var humanAvatarInteraction =
                 runtimeRoot.AddComponent<HumanAvatarInteractionController>();
+            var humanMotionSync = runtimeRoot.AddComponent<HumanMotionSync>();
             var behaviorRuntime = runtimeRoot.AddComponent<CharacterBehaviorRuntime>();
 
             // P4：Passthrough Camera + 深度 + 物体投影
@@ -544,6 +545,24 @@ namespace Qiyu.Quest.Editor
                 ("motionLibrary", avatarObject.GetComponent<MotionLibrary>()),
                 ("proceduralFallback", avatarObject.GetComponent<ProceduralMotionFallback>()),
                 ("expressionDriver", avatarObject.GetComponent<BlendShapeAvatarDriver>()));
+            Wire(humanMotionCapture, ("head", centerEye));
+            Wire(motionUnderstanding,
+                ("capture", humanMotionCapture),
+                ("worldModel", behaviorWorld),
+                ("avatarRoot", avatarObject.transform));
+            Wire(sharedAttention,
+                ("worldModel", behaviorWorld),
+                ("avatarRoot", avatarObject.transform));
+            Wire(humanAvatarInteraction,
+                ("motionUnderstanding", motionUnderstanding),
+                ("reflexLayer", reflexLayer),
+                ("interactionState", interactionState),
+                ("worldModel", behaviorWorld),
+                ("avatarRoot", avatarObject.transform));
+            Wire(humanMotionSync,
+                ("capture", humanMotionCapture),
+                ("understanding", motionUnderstanding),
+                ("webSocketClient", client));
             Wire(reconstruction, ("sceneSummary", summary), ("effectMesh", effectMesh),
                 ("depthAccess", depthAccess), ("cameraAccess", cameraAccess));
             var leftHandComponent = leftHandAnchor != null

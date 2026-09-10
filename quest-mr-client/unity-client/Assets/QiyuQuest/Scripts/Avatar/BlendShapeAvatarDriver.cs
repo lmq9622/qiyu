@@ -59,6 +59,8 @@ namespace Qiyu.Quest.Avatar
                 ["confused"] = new[] { "Surprised", "confused" },
                 ["tired"] = new[] { "Sorrow", "tired" },
                 ["surprised"] = new[] { "Surprised", "surprised" },
+                ["curious"] = new[] { "Surprised", "Joy", "curious" },
+                ["embarrassed"] = new[] { "Relaxed", "Blink", "embarrassed" },
             };
 
         private void Awake()

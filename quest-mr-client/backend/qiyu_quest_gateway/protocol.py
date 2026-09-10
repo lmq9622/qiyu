@@ -17,7 +17,7 @@ class EnvelopeError(ValueError):
 class Envelope:
     """轻量 Envelope 对象，不强制依赖 Pydantic 才能收发。"""
 
-    __slots__ = ("v", "id", "type", "ts", "session", "reply_to", "payload")
+    __slots__ = ("v", "id", "type", "ts", "session", "reply_to", "seq", "ack", "payload")
 
     def __init__(
         self,
@@ -28,6 +28,8 @@ class Envelope:
         ts: Optional[int] = None,
         session: Optional[str] = None,
         reply_to: Optional[str] = None,
+        seq: int = 0,
+        ack: int = 0,
         v: str = PROTOCOL_VERSION,
     ) -> None:
         self.v = v
@@ -36,6 +38,8 @@ class Envelope:
         self.ts = int(ts if ts is not None else time.time() * 1000)
         self.session = session
         self.reply_to = reply_to
+        self.seq = max(0, int(seq or 0))
+        self.ack = max(0, int(ack or 0))
         self.payload = dict(payload or {})
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,6 +54,10 @@ class Envelope:
             out["session"] = self.session
         if self.reply_to:
             out["reply_to"] = self.reply_to
+        if self.seq:
+            out["seq"] = self.seq
+        if self.ack:
+            out["ack"] = self.ack
         return out
 
     def to_json(self) -> str:
@@ -61,12 +69,16 @@ class Envelope:
         payload: Optional[dict[str, Any]] = None,
         *,
         session: Optional[str] = None,
+        seq: int = 0,
+        ack: int = 0,
     ) -> "Envelope":
         return Envelope(
             type=type,
             payload=payload or {},
             reply_to=self.id,
             session=session if session is not None else self.session,
+            seq=seq,
+            ack=ack,
         )
 
     @classmethod
@@ -90,6 +102,10 @@ class Envelope:
         payload = data.get("payload")
         if not isinstance(payload, dict):
             raise EnvelopeError("payload_must_be_object")
+        seq = data.get("seq") or 0
+        ack = data.get("ack") or 0
+        if not isinstance(seq, int) or not isinstance(ack, int) or seq < 0 or ack < 0:
+            raise EnvelopeError("invalid_seq_or_ack")
         return cls(
             type=typ,
             payload=payload,
@@ -97,6 +113,8 @@ class Envelope:
             ts=ts,
             session=str(data["session"]) if data.get("session") else None,
             reply_to=str(data["reply_to"]) if data.get("reply_to") else None,
+            seq=seq,
+            ack=ack,
             v=v,
         )
 
@@ -107,5 +125,14 @@ def build_envelope(
     *,
     session: Optional[str] = None,
     reply_to: Optional[str] = None,
+    seq: int = 0,
+    ack: int = 0,
 ) -> Envelope:
-    return Envelope(type=type, payload=payload, session=session, reply_to=reply_to)
+    return Envelope(
+        type=type,
+        payload=payload,
+        session=session,
+        reply_to=reply_to,
+        seq=seq,
+        ack=ack,
+    )

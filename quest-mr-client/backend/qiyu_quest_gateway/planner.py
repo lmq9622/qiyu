@@ -1,32 +1,53 @@
-"""AvatarIntent / SpatialAction 规划器。
+"""AvatarIntent v1.1 规划器。
 
 定位：
-- 这是“结构化意图翻译层”，不是新的 Agent 系统；
+- 这是“结构化意图翻译层”，不是动作控制器；
 - 复用 Qiyu 现有 LLM 通道（由 quest_server 注入 LLMClient.complete_json）；
-- LLM 只输出高层意图/动作，绝不输出骨骼或逐帧坐标；
-- 目标物体必须存在于 Quest 上报的 WorldState 中，否则丢弃该空间动作，
-  防止模型凭空编造不存在的物体。
+- LLM 只输出 goal/target/attention/emotion/style/urgency；
+- 路径、速度、脚步、骨骼、IK、Animator 参数全部由 Quest 本地 Behavior Runtime 决定；
+- 目标物体必须存在于 Quest 上报的 WorldState 中，否则清空该目标。
+
+兼容：
+- 旧 v1.0 AvatarIntent.action 会由 goal 确定性映射，供旧客户端使用；
+- 旧 SpatialAction 仍可由显式 spatial_hint 或旧测试输入派生，但新客户端不再消费它。
 """
 from __future__ import annotations
 
 import json
 import re
+import uuid
 from typing import Any, Awaitable, Callable, Optional
 
 from loguru import logger
 
-from qiyu_quest_gateway.models import AvatarIntent, SpatialAction
+from qiyu_quest_gateway.models import AvatarIntent, SpatialAction, SpatialHint
 from qiyu_quest_gateway.world_state import render_world_state_for_llm
 
 LLMComplete = Callable[[str, str, float], Awaitable[str]]
 
-_VALID_ACTIONS = {
-    "idle", "look_at_user", "look_away", "look_at_object", "nod",
-    "shake", "wave", "lean_in", "sigh", "laugh", "blush",
+_VALID_GOALS = {
+    "idle", "listen_user", "think", "speak", "observe_user",
+    "observe_object", "approach_user", "maintain_distance", "retreat",
+    "follow_user", "go_to_object", "point_at_object", "inspect_object",
+    "invite_to_object", "sit", "stand", "reposition", "wave", "nod",
+    "shake_head", "laugh", "sigh", "surprised", "comfort_user",
 }
 _VALID_EMOTIONS = {
     "neutral", "happy", "calm", "sad", "annoyed", "angry",
     "excited", "shy", "confused", "tired", "surprised",
+    "curious", "embarrassed",
+}
+_VALID_STYLES = {
+    "neutral", "casual", "warm", "shy", "playful",
+    "serious", "tired", "excited", "guarded",
+}
+_VALID_SPEECH_ACTS = {
+    "greet", "answer", "comment", "question", "comfort", "refuse",
+    "apologize", "observe", "celebrate", "tease", "acknowledge",
+}
+_VALID_LEGACY_ACTIONS = {
+    "idle", "look_at_user", "look_away", "look_at_object", "nod",
+    "shake", "wave", "lean_in", "sigh", "laugh", "blush",
 }
 _VALID_SPATIAL = {
     "move_to", "approach", "move_away", "face_user", "face_object",
@@ -34,35 +55,59 @@ _VALID_SPATIAL = {
 }
 _VALID_ANCHOR = {"world", "head", "left_hand", "right_hand", "surface", "object"}
 
-_SYSTEM_PROMPT = """你是 Qiyu MR 客户端的“结构化动作规划器”。
-你的唯一任务：把角色的最终台词 + 真实房间空间状态，翻译成高层 AvatarIntent，
-必要时再给一个高层 SpatialAction。你不负责生成台词，也不负责控制骨骼。
+_GOAL_TO_LEGACY_ACTION = {
+    "observe_user": "look_at_user",
+    "listen_user": "look_at_user",
+    "speak": "look_at_user",
+    "comfort_user": "lean_in",
+    "observe_object": "look_at_object",
+    "point_at_object": "look_at_object",
+    "inspect_object": "look_at_object",
+    "invite_to_object": "look_at_object",
+    "wave": "wave",
+    "nod": "nod",
+    "shake_head": "shake",
+    "laugh": "laugh",
+    "sigh": "sigh",
+    "surprised": "look_at_user",
+    "retreat": "look_away",
+    "idle": "idle",
+}
 
-只输出一个 JSON 对象，不要 Markdown、不要解释。格式：
+_SYSTEM_PROMPT = """你是 Qiyu MR 角色的“高层意图规划器”。
+你的唯一任务：根据角色台词、真实房间状态、角色情绪和关系，决定角色此刻想做什么。
+你不负责生成台词，不负责路径，不负责动画，不负责骨骼、IK、脚步或逐帧控制。
+
+只输出一个 JSON 对象，不要 Markdown、不要解释：
 {
   "avatar_intent": {
-    "emotion": "neutral|happy|calm|sad|annoyed|angry|excited|shy|confused|tired|surprised",
-    "intensity": 0.0~1.0,
-    "expression": "可选，VRM/角色表情名",
-    "gesture": "可选，动作名",
-    "action": "idle|look_at_user|look_away|look_at_object|nod|shake|wave|lean_in|sigh|laugh|blush",
+    "goal": "idle|listen_user|think|speak|observe_user|observe_object|approach_user|maintain_distance|retreat|follow_user|go_to_object|point_at_object|inspect_object|invite_to_object|sit|stand|reposition|wave|nod|shake_head|laugh|sigh|surprised|comfort_user",
+    "target": "允许列表中的目标 id；没有则空字符串",
+    "attention": "允许列表中的目标 id；没有则空字符串",
+    "emotion": "neutral|happy|calm|sad|annoyed|angry|excited|shy|confused|tired|surprised|curious|embarrassed",
+    "emotion_intensity": 0.0,
+    "behavior_style": "neutral|casual|warm|shy|playful|serious|tired|excited|guarded",
+    "urgency": 0.0,
+    "social_priority": 0.5,
+    "duration_hint_ms": 0,
+    "speech_act": "greet|answer|comment|question|comfort|refuse|apologize|observe|celebrate|tease|acknowledge",
+    "priority": 1,
     "speaking": true,
     "prosody": {"rate": 1.0, "pitch": 1.0, "volume": 1.0},
-    "duration_ms": 0
-  },
-  "spatial_action": null
+    "spatial_hint": null
+  }
 }
 
 规则：
-1. 台词明显在说话 → speaking=true；语气平静 → emotion=neutral/calm。
-2. 没有明确空间需求时 spatial_action 必须为 null，禁止为了“看起来像 MR”硬造动作。
-3. 只有当台词明确要求角色靠近/远离/看向/操作某个真实物体时，才给 spatial_action。
-4. spatial_action.target_id 只能从“允许的目标 id 列表”里选；列表为空或没有合适目标 → null。
-5. spatial_action 只填高层意图（move_to/approach/face_object/look_at/interact 等），
-   由 Quest 本地 NavMesh/动画系统决定具体路径与骨骼，禁止输出坐标序列。
-6. spatial_action 可选字段：target_id, action, speed(0.1~2), stop_distance_m,
-   min_distance_m, face_target(bool), avoid_obstacles(bool), priority(0~3),
-   duration_ms, animation。
+1. 只输出高层目标；禁止输出坐标、路径、速度、脚步、关节角度、Animator 参数。
+2. 没有明确空间需求时 spatial_hint 必须为 null。
+3. target/attention 只能从“允许的目标 id 列表”里选；列表为空时留空。
+4. 用户正在说话 → goal 优先 listen_user，attention=user，不要抢动作。
+5. 角色正在回答 → goal=speak，speaking=true；必要时 attention=user。
+6. 用户明确要求靠近/远离/看向/操作真实物体时，用对应 goal + target；
+   spatial_hint 最多只填 target_id / desired_distance_m / face_target。
+7. 关系亲密、情绪好奇时可以提高 social_priority，但不要因此强行移动。
+8. 不确定时选 idle 或 observe_user，不要编造目标。
 """
 
 
@@ -155,7 +200,7 @@ def _build_user_prompt(reply_text: str, spatial_context: str,
             for t in targets[:40]
         )
     else:
-        target_lines = "（空：本轮没有可用的真实目标，spatial_action 必须为 null）"
+        target_lines = "（空：本轮没有可用的真实目标，target/attention 必须留空）"
 
     emo = emotion_state or {}
     emo_line = ""
@@ -210,45 +255,134 @@ def _validate(parsed: dict, targets: list[dict]) -> tuple[Optional[AvatarIntent]
     if not isinstance(intent_raw, dict):
         return None, None
 
+    # "user" 是协议约定的特殊目标，不属于 WorldState anchors/objects。
+    valid_ids = {t["id"] for t in targets} | {"user"}
+    goal = str(intent_raw.get("goal") or "").strip()
+    legacy_action = str(intent_raw.get("action") or "").strip()
+    if goal not in _VALID_GOALS:
+        goal = _legacy_action_to_goal(legacy_action)
+    if goal not in _VALID_GOALS:
+        goal = "idle"
+
+    target = str(intent_raw.get("target") or "").strip()
+    if target and target not in valid_ids:
+        logger.warning(f"[QuestPlanner] 丢弃不存在目标: {target}")
+        target = ""
+    attention = str(intent_raw.get("attention") or "").strip()
+    if attention and attention not in valid_ids:
+        logger.warning(f"[QuestPlanner] 丢弃不存在关注目标: {attention}")
+        attention = ""
+
     emotion = str(intent_raw.get("emotion") or "neutral")
     if emotion not in _VALID_EMOTIONS:
         emotion = "neutral"
-    action = str(intent_raw.get("action") or "idle")
-    if action not in _VALID_ACTIONS:
-        action = "idle"
+    style = str(intent_raw.get("behavior_style") or "neutral")
+    if style not in _VALID_STYLES:
+        style = "neutral"
+    speech_act = str(intent_raw.get("speech_act") or "").strip()
+    if speech_act not in _VALID_SPEECH_ACTS:
+        speech_act = ""
+
+    intensity = _clamp(
+        intent_raw.get("emotion_intensity", intent_raw.get("intensity")),
+        0.0, 1.0, 0.0,
+    )
+    duration_hint_ms = int(_clamp(
+        intent_raw.get("duration_hint_ms", intent_raw.get("duration_ms")),
+        0, 600000, 0,
+    ))
+    spatial_hint = _parse_spatial_hint(intent_raw.get("spatial_hint"), valid_ids)
+
+    legacy = legacy_action if legacy_action in _VALID_LEGACY_ACTIONS else ""
+    if not legacy:
+        legacy = _GOAL_TO_LEGACY_ACTION.get(goal, "idle")
 
     intent = AvatarIntent(
+        id=uuid.uuid4().hex,
+        intent_id=uuid.uuid4().hex,
+        goal=goal,
+        target=target,
+        attention=attention,
+        behavior_style=style,
+        urgency=_clamp(intent_raw.get("urgency"), 0.0, 1.0, 0.0),
+        social_priority=_clamp(intent_raw.get("social_priority"), 0.0, 1.0, 0.5),
+        duration_hint_ms=duration_hint_ms,
+        speech_act=speech_act,
+        priority=int(_clamp(intent_raw.get("priority"), 0, 5, 1)),
+        interrupt_policy=_normalize_interrupt_policy(intent_raw.get("interrupt_policy")),
         emotion=emotion,
-        intensity=_clamp(intent_raw.get("intensity"), 0.0, 1.0, 0.0),
+        intensity=intensity,
+        emotion_intensity=intensity,
         expression=str(intent_raw.get("expression") or "")[:64],
         gesture=str(intent_raw.get("gesture") or "")[:64],
-        action=action,
+        action=legacy,
         speaking=bool(intent_raw.get("speaking", True)),
         prosody=intent_raw.get("prosody") if isinstance(intent_raw.get("prosody"), dict) else None,
         text="",
-        duration_ms=int(_clamp(intent_raw.get("duration_ms"), 0, 600000, 0)),
+        duration_ms=duration_hint_ms,
+        cancel_on_barge_in=bool(intent_raw.get("cancel_on_barge_in", True)),
+        spatial_hint=spatial_hint,
     )
 
+    # 兼容旧 v1.0 测试/客户端：显式 spatial_action 仍然校验；
+    # 新版 LLM 不应输出该字段，新客户端也不消费它。
     spatial_raw = parsed.get("spatial_action")
-    if not isinstance(spatial_raw, dict):
+    if isinstance(spatial_raw, dict):
+        return intent, _validate_legacy_spatial(spatial_raw, valid_ids)
+
+    if spatial_hint is None:
         return intent, None
 
+    legacy_spatial = _compile_legacy_spatial(goal, spatial_hint)
+    return intent, legacy_spatial
+
+
+def _parse_spatial_hint(raw: Any, valid_ids: set[str]) -> Optional[SpatialHint]:
+    if not isinstance(raw, dict):
+        return None
+    target_id = str(raw.get("target_id") or "").strip()
+    if not target_id or target_id not in valid_ids:
+        return None
+    return SpatialHint(
+        target_id=target_id,
+        desired_distance_m=_clamp(raw.get("desired_distance_m"), 0.2, 5.0, 0.9),
+        face_target=bool(raw.get("face_target", True)),
+    )
+
+
+def _compile_legacy_spatial(goal: str, hint: SpatialHint) -> Optional[SpatialAction]:
+    if goal in ("go_to_object", "inspect_object"):
+        action = "move_to"
+    elif goal in ("observe_object", "point_at_object", "invite_to_object"):
+        action = "look_at"
+    elif goal == "sit":
+        action = "move_to"
+    else:
+        return None
+    return SpatialAction(
+        action=action,
+        target_id=hint.target_id,
+        stop_distance_m=hint.desired_distance_m,
+        face_target=hint.face_target,
+        priority=2,
+    )
+
+
+def _validate_legacy_spatial(spatial_raw: dict, valid_ids: set[str]) -> Optional[SpatialAction]:
     spatial_action = str(spatial_raw.get("action") or "")
     if spatial_action not in _VALID_SPATIAL:
-        return intent, None
+        return None
     target_id = str(spatial_raw.get("target_id") or "").strip()
-    valid_ids = {t["id"] for t in targets}
     if target_id and target_id not in valid_ids:
         logger.warning(f"[QuestPlanner] 丢弃不存在目标的 SpatialAction: {target_id}")
-        return intent, None
+        return None
     if spatial_action in ("move_to", "approach", "move_away", "face_object",
                           "look_at", "interact") and not target_id:
-        return intent, None
-
+        return None
     anchor = str(spatial_raw.get("anchor") or "world")
     if anchor not in _VALID_ANCHOR:
         anchor = "world"
-    action_obj = SpatialAction(
+    return SpatialAction(
         action=spatial_action,
         target_id=target_id,
         anchor=anchor,
@@ -261,7 +395,29 @@ def _validate(parsed: dict, targets: list[dict]) -> tuple[Optional[AvatarIntent]
         duration_ms=int(_clamp(spatial_raw.get("duration_ms"), 0, 600000, 0)),
         animation=str(spatial_raw.get("animation") or "")[:64],
     )
-    return intent, action_obj
+
+
+def _legacy_action_to_goal(action: str) -> str:
+    return {
+        "look_at_user": "observe_user",
+        "look_away": "retreat",
+        "look_at_object": "observe_object",
+        "nod": "nod",
+        "shake": "shake_head",
+        "wave": "wave",
+        "lean_in": "comfort_user",
+        "sigh": "sigh",
+        "laugh": "laugh",
+        "blush": "idle",
+        "idle": "idle",
+    }.get(action, "idle")
+
+
+def _normalize_interrupt_policy(value: Any) -> str:
+    text = str(value or "on_higher_priority")
+    if text in ("never", "on_higher_priority", "on_barge_in", "always"):
+        return text
+    return "on_higher_priority"
 
 
 def _clamp(value: Any, lo: float, hi: float, default: float) -> float:
@@ -297,10 +453,20 @@ def _fallback_intent(reply_text: str, emotion_state: Optional[dict],
     elif joy >= 40:
         emotion, intensity = "calm", 0.4
 
+    goal = "observe_user" if user_visible else "idle"
     action = "look_at_user" if user_visible else "idle"
     return AvatarIntent(
+        id=uuid.uuid4().hex,
+        intent_id=uuid.uuid4().hex,
+        goal=goal,
+        target="",
+        attention="",
+        behavior_style="casual" if user_visible else "neutral",
+        urgency=0.0,
+        social_priority=0.5,
         emotion=emotion,
         intensity=round(intensity, 2),
+        emotion_intensity=round(intensity, 2),
         action=action,
         speaking=bool(reply_text),
         prosody={"rate": 1.0, "pitch": 1.0, "volume": 1.0},
