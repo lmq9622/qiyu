@@ -29,3 +29,8 @@ venv/
 # Runtime
 *.log
 .env
+
+# 根目录 .gitignore 的 `tools/` 会连带忽略本目录下的验收脚本，
+# 这里定向放行：P7 验收脚本必须入库，否则文档引用的命令无处可寻。
+!tools/
+!tools/**
