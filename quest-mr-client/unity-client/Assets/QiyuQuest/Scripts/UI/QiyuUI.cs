@@ -549,26 +549,32 @@ namespace Qiyu.Quest.UI
 
             AddShadow(root, "Shadow", radius, new Vector2(0f, -14f), 14f, 0.24f * alpha);
 
-            var top = light
-                ? (strong ? LightGlassStrongTop : LightGlassTop)
-                : (strong ? GlassStrongTop : GlassTop);
-            var bottom = light
-                ? (strong ? LightGlassStrongBottom : LightGlassBottom)
-                : (strong ? GlassStrongBottom : GlassBottom);
+            // 主体永远是已验证稳定的圆角玻璃；白色毛玻璃通过叠加层实现。
+            var top = strong ? GlassStrongTop : GlassTop;
+            var bottom = strong ? GlassStrongBottom : GlassBottom;
             var body = CreateRect(root, "Body");
             Stretch(body);
             var bodyImage = body.gameObject.AddComponent<Image>();
-            // 白色卡片主体先用已验证稳定的圆角 Sprite，磨砂噪点单独叠层，
-            // 避免毛玻璃 Sprite 本身出问题时整张卡片消失。
-            bodyImage.sprite = light
-                ? RoundedSprite(radius, top, bottom, LightBorderTop, LightBorderBottom, 1.6f)
-                : RoundedSprite(radius, top, bottom, BorderTop, BorderBottom, 1.6f);
+            bodyImage.sprite = RoundedSprite(radius, top, bottom, BorderTop, BorderBottom, 1.6f);
             bodyImage.type = Image.Type.Sliced;
             bodyImage.raycastTarget = false;
             body.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
 
             if (light)
             {
+                // 白色磨砂玻璃叠加层：即使这层出问题，下面的深色卡片仍在。
+                var whiteTint = CreateRect(root, "WhiteTint");
+                Stretch(whiteTint, 1.5f);
+                var whiteTintImage = whiteTint.gameObject.AddComponent<Image>();
+                whiteTintImage.sprite = RoundedSprite(radius - 2,
+                    new Color(1f, 1f, 1f, 0.90f),
+                    new Color(0.93f, 0.95f, 1f, 0.80f),
+                    new Color(1f, 1f, 1f, 0.96f),
+                    new Color(0.62f, 0.66f, 0.76f, 0.45f), 1.3f);
+                whiteTintImage.type = Image.Type.Sliced;
+                whiteTintImage.raycastTarget = false;
+                whiteTint.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+
                 var frost = CreateRect(root, "Frost");
                 Stretch(frost, 1.5f);
                 var frostImage = frost.gameObject.AddComponent<Image>();

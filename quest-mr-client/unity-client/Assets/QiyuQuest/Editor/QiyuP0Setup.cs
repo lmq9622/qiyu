@@ -436,6 +436,13 @@ namespace Qiyu.Quest.Editor
             var avatarObject = new GameObject("QiyuAvatar");
             avatarObject.transform.SetParent(runtimeRoot.transform, false);
             avatarObject.AddComponent<NavMeshAgent>();
+            var avatarCapsule = avatarObject.AddComponent<CapsuleCollider>();
+            avatarCapsule.height = 1.7f;
+            avatarCapsule.radius = 0.25f;
+            avatarCapsule.center = new Vector3(0f, 0.85f, 0f);
+            var avatarBody = avatarObject.AddComponent<Rigidbody>();
+            avatarBody.isKinematic = true;
+            avatarBody.useGravity = false;
             avatarObject.AddComponent<CharacterLocomotionController>();
             avatarObject.AddComponent<AvatarLookController>();
             avatarObject.AddComponent<BlendShapeAvatarDriver>();
@@ -448,6 +455,12 @@ namespace Qiyu.Quest.Editor
             var behaviorState = runtimeRoot.AddComponent<CharacterStateStore>();
             var behaviorPolicy = runtimeRoot.AddComponent<TinyBehaviorPolicy>();
             var reflexLayer = runtimeRoot.AddComponent<CharacterReflexLayer>();
+            var humanMotionCapture = runtimeRoot.AddComponent<HumanMotionCapture>();
+            var motionUnderstanding = runtimeRoot.AddComponent<MotionUnderstanding>();
+            var sharedAttention = runtimeRoot.AddComponent<SharedAttentionController>();
+            var interactionState = runtimeRoot.AddComponent<InteractionStateController>();
+            var humanAvatarInteraction =
+                runtimeRoot.AddComponent<HumanAvatarInteractionController>();
             var behaviorRuntime = runtimeRoot.AddComponent<CharacterBehaviorRuntime>();
 
             // P4：Passthrough Camera + 深度 + 物体投影
@@ -470,6 +483,7 @@ namespace Qiyu.Quest.Editor
             }
             var projector = runtimeRoot.AddComponent<ObjectDetectionProjector>();
             var reconstruction = runtimeRoot.AddComponent<QiyuSpatialReconstruction>();
+            var userBody = runtimeRoot.AddComponent<QiyuUserBodyTracker>();
             runtimeRoot.AddComponent<QuestPermissionsBootstrap>();
             runtimeRoot.AddComponent<QuestAvatarModelImporter>();
             var debugPanel = runtimeRoot.AddComponent<QiyuMRApp>();
@@ -519,6 +533,11 @@ namespace Qiyu.Quest.Editor
                 ("animationController", avatarObject.GetComponent<CharacterAnimationController>()),
                 ("microphone", microphone),
                 ("ttsPlayer", ttsPlayer),
+                ("humanMotionCapture", humanMotionCapture),
+                ("motionUnderstanding", motionUnderstanding),
+                ("sharedAttention", sharedAttention),
+                ("interactionState", interactionState),
+                ("humanAvatarInteraction", humanAvatarInteraction),
                 ("avatarRoot", avatarObject.transform),
                 ("userHead", centerEye));
             Wire(avatarObject.GetComponent<CharacterAnimationController>(),
@@ -527,6 +546,29 @@ namespace Qiyu.Quest.Editor
                 ("expressionDriver", avatarObject.GetComponent<BlendShapeAvatarDriver>()));
             Wire(reconstruction, ("sceneSummary", summary), ("effectMesh", effectMesh),
                 ("depthAccess", depthAccess), ("cameraAccess", cameraAccess));
+            var leftHandComponent = leftHandAnchor != null
+                ? leftHandAnchor.GetComponentInChildren<OVRHand>(true)
+                : null;
+            var rightHandComponent = rightHandAnchor != null
+                ? rightHandAnchor.GetComponentInChildren<OVRHand>(true)
+                : null;
+            var leftControllerComponent = leftHandAnchor != null
+                ? leftHandAnchor.GetComponentInChildren<OVRControllerHelper>(true)
+                : null;
+            var rightControllerComponent = rightHandAnchor != null
+                ? rightHandAnchor.GetComponentInChildren<OVRControllerHelper>(true)
+                : null;
+            Wire(userBody,
+                ("head", centerEye),
+                ("leftHand", leftHandComponent),
+                ("rightHand", rightHandComponent),
+                ("leftHandAnchor", leftHandAnchor),
+                ("rightHandAnchor", rightHandAnchor),
+                ("leftController", leftControllerComponent),
+                ("rightController", rightControllerComponent),
+                ("sceneSummary", summary),
+                ("worldStatePublisher", publisher),
+                ("webSocketClient", client));
             Wire(debugPanel,
                 ("webSocketClient", client),
                 ("microphone", microphone),
@@ -536,8 +578,10 @@ namespace Qiyu.Quest.Editor
                 ("navMeshBuilder", navMeshBuilder),
                 ("objectDetector", projector),
                 ("avatarRouter", avatarRouter),
+                ("behaviorRuntime", behaviorRuntime),
                 ("worldStatePublisher", publisher),
                 ("spatialReconstruction", reconstruction),
+                ("userBodyTracker", userBody),
                 ("followTarget", centerEye));
 
             var lightObject = new GameObject("Directional Light");

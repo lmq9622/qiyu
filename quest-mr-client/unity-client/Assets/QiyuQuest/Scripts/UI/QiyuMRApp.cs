@@ -4,6 +4,7 @@ using System.Text;
 using Meta.XR.MRUtilityKit;
 using Newtonsoft.Json.Linq;
 using Qiyu.Quest.Avatar;
+using Qiyu.Quest.Behavior;
 using Qiyu.Quest.Networking;
 using Qiyu.Quest.Perception;
 using Qiyu.Quest.Spatial;
@@ -34,8 +35,10 @@ namespace Qiyu.Quest.UI
         [SerializeField] private RoomNavMeshBuilder navMeshBuilder;
         [SerializeField] private ObjectDetectionProjector objectDetector;
         [SerializeField] private AvatarIntentRouter avatarRouter;
+        [SerializeField] private CharacterBehaviorRuntime behaviorRuntime;
         [SerializeField] private MrukWorldStatePublisher worldStatePublisher;
         [SerializeField] private QiyuSpatialReconstruction spatialReconstruction;
+        [SerializeField] private QiyuUserBodyTracker userBodyTracker;
         [SerializeField] private Transform followTarget;
 
         [Header("面板")]
@@ -81,6 +84,7 @@ namespace Qiyu.Quest.UI
         private TMP_Text _navText;
         private TMP_Text _objectText;
         private TMP_Text _reconstructionText;
+        private TMP_Text _userBodyText;
         private TMP_Text _brainText;
         private TMP_Text _debugText;
         private TMP_Text _chatHistory;
@@ -115,6 +119,10 @@ namespace Qiyu.Quest.UI
                 {
                     followTarget = centerEye.transform;
                 }
+            }
+            if (behaviorRuntime == null)
+            {
+                behaviorRuntime = FindFirstObjectByType<CharacterBehaviorRuntime>();
             }
             BuildShell();
             ShowTab("首页");
@@ -794,6 +802,7 @@ namespace Qiyu.Quest.UI
             _navText = null;
             _objectText = null;
             _reconstructionText = null;
+            _userBodyText = null;
             _brainText = null;
             _debugText = null;
             _chatHistory = null;
@@ -1034,6 +1043,30 @@ namespace Qiyu.Quest.UI
             _reconstructionText = BodyLabel(recon.transform, "Info", 18,
                 QiyuUI.TextSecondary, 120);
 
+            var userBodyCard = QiyuUI.Card(_content, "UserBody", false,
+                QiyuUI.RadiusCard, 36, 18);
+            QiyuUI.CardHeader(userBodyCard.transform, "用户建模",
+                "头显 + 双手/手柄 5 点动捕，上传给 LLM 判断用户位置",
+                "5-point", QiyuUI.AccentPurple);
+            QiyuUI.Toggle(userBodyCard.transform, "ShowBody", "显示用户身体模型",
+                userBodyTracker != null && userBodyTracker.Visualize, value =>
+                {
+                    if (userBodyTracker != null)
+                    {
+                        userBodyTracker.Visualize = value;
+                    }
+                });
+            QiyuUI.Toggle(userBodyCard.transform, "UploadBody", "上传用户位置（5Hz）",
+                userBodyTracker != null && userBodyTracker.Upload, value =>
+                {
+                    if (userBodyTracker != null)
+                    {
+                        userBodyTracker.Upload = value;
+                    }
+                });
+            _userBodyText = BodyLabel(userBodyCard.transform, "Info", 18,
+                QiyuUI.TextSecondary, 150);
+
             var objectCard = QiyuUI.Card(_content, "Objects", false, QiyuUI.RadiusCard, 32, 18);
             QiyuUI.CardHeader(objectCard.transform, "物体识别",
                 "Passthrough Camera → 视觉模型 → 3D 空间投影", "按需", QiyuUI.AccentWarm);
@@ -1150,6 +1183,30 @@ namespace Qiyu.Quest.UI
                         "（桌子 / 床 / 储物 / 门窗框等）";
                 }
             }
+            if (_userBodyText != null)
+            {
+                if (userBodyTracker == null)
+                {
+                    _userBodyText.text = "用户建模组件未挂接";
+                }
+                else
+                {
+                    var head = userBodyTracker.HeadPosition;
+                    var left = userBodyTracker.LeftHandPosition;
+                    var right = userBodyTracker.RightHandPosition;
+                    _userBodyText.text =
+                        $"头 ({head.x:F2}, {head.y:F2}, {head.z:F2})   ·   " +
+                        $"身高 {userBodyTracker.EstimatedHeight:F2} m   ·   " +
+                        $"前倾 {userBodyTracker.LeanDegrees:F1}°\n" +
+                        $"左手 ({left.x:F2}, {left.y:F2}, {left.z:F2})  " +
+                        $"[{userBodyTracker.LeftHandSource}]\n" +
+                        $"右手 ({right.x:F2}, {right.y:F2}, {right.z:F2})  " +
+                        $"[{userBodyTracker.RightHandSource}]\n" +
+                        $"置信度 {userBodyTracker.Confidence:F2}   ·   " +
+                        $"上传 {(userBodyTracker.Upload ? "开" : "关")}   ·   " +
+                        $"可视化 {(userBodyTracker.Visualize ? "开" : "关")}";
+                }
+            }
         }
 
         // ---------------- 角色 ----------------
@@ -1242,6 +1299,14 @@ namespace Qiyu.Quest.UI
                 builder.AppendLine($"表情 {avatarRouter?.CurrentEmotion ?? "-"}   ·   " +
                                    $"动作 {avatarRouter?.CurrentAction ?? "-"}   ·   " +
                                    $"说话 {(avatarRouter != null && avatarRouter.IsSpeaking ? "是" : "否")}");
+                if (behaviorRuntime != null)
+                {
+                    builder.AppendLine(
+                        $"本地行为 {BehaviorCatalog.ToName(behaviorRuntime.CurrentDecision.kind)}   ·   " +
+                        $"目标 {behaviorRuntime.CurrentDecision.targetId}   ·   " +
+                        $"置信度 {behaviorRuntime.CurrentDecision.confidence:F2}   ·   " +
+                        $"策略 {behaviorRuntime.CurrentDecision.policySource}");
+                }
                 builder.Append("支持格式：VRM 1.0 / VRM 0.x / GLB（UniVRM / glTFast）");
                 _avatarStatus.text = builder.ToString();
             }
