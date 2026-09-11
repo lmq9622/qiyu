@@ -332,3 +332,22 @@ def test_build_context_from_world_and_character_state():
     assert ctx.emotion == "happy"
     assert ctx.relationship_tier == "friend"
     assert ctx.locked_channels == ["gesture"]
+# --------------------------------------------------------------------- LLM 输出
+def test_llm_behavior_intent_is_accepted_and_unknown_is_dropped():
+    from qiyu_quest_gateway.planner import _build_behavior
+    ok = _build_behavior({"behavior": {"intent": "shy", "intensity": 0.7}},
+                         "……", None)
+    assert ok is not None and ok["intent"] == "shy"
+    bad = _build_behavior({"behavior": {"intent": "super_cute_head_turn_93"}},
+                          "……", None)
+    assert bad is None, "未知意图必须被丢弃，不能进行为层"
+
+
+def test_keyword_hint_produces_behavior_and_plain_talk_does_not():
+    from qiyu_quest_gateway.planner import _build_behavior
+    greet = _build_behavior(None, "你好呀，今天怎么样", None)
+    assert greet is not None and greet["intent"] == "greeting"
+    plain = _build_behavior(None, "今天天气不错，我刚才在整理桌子", None)
+    assert plain is None, "普通陈述不应触发特殊行为"
+    sad = _build_behavior(None, "我今天有点难过", None)
+    assert sad is not None and sad["intent"] == "comfort"

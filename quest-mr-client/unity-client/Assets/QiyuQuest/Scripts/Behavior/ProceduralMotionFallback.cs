@@ -13,6 +13,12 @@ namespace Qiyu.Quest.Behavior
         [SerializeField] private Animator animator;
         [SerializeField] private float blendSpeed = 5f;
 
+        [Header("静止姿态修正")]
+        /// <summary>MMD/Humanoid 模型导入后默认是 T-pose，必须放下手臂才像人。</summary>
+        [SerializeField] private bool relaxedArmBaseline = true;
+        [SerializeField] private float armDownBias = 0.20f;
+        [SerializeField] private float forearmForwardBias = 0.30f;
+
         public bool Active { get; private set; }
 
         private Transform _hips;
@@ -22,6 +28,8 @@ namespace Qiyu.Quest.Behavior
         private Transform _rightUpperArm;
         private Transform _leftLowerArm;
         private Transform _rightLowerArm;
+        private Transform _leftHand;
+        private Transform _rightHand;
         private Quaternion _hipsRest;
         private Quaternion _chestRest;
         private Quaternion _headRest;
@@ -197,6 +205,12 @@ namespace Qiyu.Quest.Behavior
             _rightUpperArm = animator.GetBoneTransform(HumanBodyBones.RightUpperArm);
             _leftLowerArm = animator.GetBoneTransform(HumanBodyBones.LeftLowerArm);
             _rightLowerArm = animator.GetBoneTransform(HumanBodyBones.RightLowerArm);
+            _leftHand = animator.GetBoneTransform(HumanBodyBones.LeftHand);
+            _rightHand = animator.GetBoneTransform(HumanBodyBones.RightHand);
+            if (relaxedArmBaseline)
+            {
+                ApplyRelaxedArmBaseline();
+            }
             _hipsRest = RestOf(_hips);
             _chestRest = RestOf(_chest);
             _headRest = RestOf(_head);
@@ -209,6 +223,75 @@ namespace Qiyu.Quest.Behavior
             {
                 Debug.Log("[QiyuProceduralFallback] 无动作资产，启用低精度程序化兜底");
             }
+        }
+
+        /// <summary>
+        /// 把 T-pose 的手臂放成自然下垂（含轻微肘屈）。
+        ///
+        /// 做法不依赖具体骨骼轴向：用"肩→肘"当前方向与目标方向的差旋转，
+        /// 在世界空间旋转骨骼，再把结果当作新的静止姿态（rest）。
+        /// 否则程序化动作都是在 T-pose 上叠加，看起来就是个木偶。
+        /// </summary>
+        private void ApplyRelaxedArmBaseline()
+        {
+            var reference = _chest != null ? _chest : _head;
+            if (reference == null)
+            {
+                return;
+            }
+            var beforeLeft = HandToHipDistance(_leftHand);
+            var beforeRight = HandToHipDistance(_rightHand);
+            RelaxArm(_leftUpperArm, _leftLowerArm, reference, -1f);
+            RelaxArm(_rightUpperArm, _rightLowerArm, reference, 1f);
+            var afterLeft = HandToHipDistance(_leftHand);
+            var afterRight = HandToHipDistance(_rightHand);
+            Debug.Log(
+                $"[QiyuProceduralFallback] 手臂基线(放下 T-pose): " +
+                $"左手到髋 {beforeLeft:F2}→{afterLeft:F2}m " +
+                $"右手到髋 {beforeRight:F2}→{afterRight:F2}m");
+        }
+
+        private void RelaxArm(Transform upper, Transform lower, Transform reference,
+                              float side)
+        {
+            if (upper == null || lower == null)
+            {
+                return;
+            }
+            var from = lower.position - upper.position;
+            if (from.sqrMagnitude < 1e-6f)
+            {
+                return;
+            }
+            var target = (Vector3.down
+                          + reference.right * (side * armDownBias)
+                          - reference.forward * (armDownBias * 0.5f)).normalized;
+            upper.rotation = Quaternion.FromToRotation(from.normalized, target) * upper.rotation;
+            // 肘部微屈，避免手臂笔直僵硬
+            var hand = lower.childCount > 0 ? lower.GetChild(0) : null;
+            if (hand == null)
+            {
+                return;
+            }
+            var forearm = hand.position - lower.position;
+            if (forearm.sqrMagnitude < 1e-6f)
+            {
+                return;
+            }
+            var forearmTarget = (forearm.normalized
+                                 + reference.forward * forearmForwardBias
+                                 + Vector3.down * 0.05f).normalized;
+            lower.rotation = Quaternion.FromToRotation(forearm.normalized, forearmTarget)
+                             * lower.rotation;
+        }
+
+        private float HandToHipDistance(Transform hand)
+        {
+            if (hand == null || _hips == null)
+            {
+                return -1f;
+            }
+            return Vector3.Distance(hand.position, _hips.position);
         }
 
         private static Quaternion RestOf(Transform bone)
@@ -226,3 +309,7 @@ namespace Qiyu.Quest.Behavior
         }
     }
 }
+
+
+
+

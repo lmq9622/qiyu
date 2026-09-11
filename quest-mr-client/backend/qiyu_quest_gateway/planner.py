@@ -95,6 +95,12 @@ _SYSTEM_PROMPT = """你是 Qiyu MR 角色的“高层意图规划器”。
     "speaking": true,
     "prosody": {"rate": 1.0, "pitch": 1.0, "volume": 1.0},
     "spatial_hint": null
+  },
+  "behavior": {
+    "intent": "greeting|shy|tease|comfort|laugh|happy|angry|sad|surprised|embarrassed|confused|tired|apologize|think|acknowledge|agree|disagree|sit_with_user|come_here 或 null",
+    "intensity": 0.0,
+    "relevance": 1.0,
+    "reason": "为什么触发这个行为；不触发时留空"
   }
 }
 
@@ -108,6 +114,11 @@ _SYSTEM_PROMPT = """你是 Qiyu MR 角色的“高层意图规划器”。
    spatial_hint 最多只填 target_id / desired_distance_m / face_target。
 7. 关系亲密、情绪好奇时可以提高 social_priority，但不要因此强行移动。
 8. 不确定时选 idle 或 observe_user，不要编造目标。
+9. behavior 只在行为意义明显时才给（打招呼/害羞/逗弄/安慰/大笑/道歉…）；
+   普通陈述、无关闲聊请给 null，角色自然保持当前状态——不要每句话都触发动作。
+10. behavior.intent 只能从上面列出的取值里选；不要输出动作细节、
+    不要输出骨骼/动画/BlendShape/Animator 名称，那些由本地行为运行时决定。
+11. relevance 表示"这句话是否需要特殊行为"的置信度（0-1）。
 """
 
 
@@ -166,6 +177,13 @@ class QuestResponsePlanner:
 
 #: 台词关键词 → 行为意图。用于 LLM 没有给出 behavior 时的"行为相关性"门控：
 #: 命中才触发行为，没命中就保持自然状态（提示词第二十节）。
+#: LLM 允许输出的行为意图（与 behavior/brain.py 的预设保持一致）
+_VALID_BEHAVIOR_INTENTS = {
+    "greeting", "shy", "tease", "comfort", "laugh", "happy", "angry", "sad",
+    "surprised", "embarrassed", "confused", "tired", "apologize", "think",
+    "acknowledge", "agree", "disagree", "sit_with_user", "come_here",
+}
+
 _BEHAVIOR_HINTS: list[tuple[tuple[str, ...], str, float]] = [
     (("你好", "您好", "嗨", "早上好", "晚上好", "欢迎回来", "hello", "hi"),
      "greeting", 0.8),
@@ -197,6 +215,10 @@ def _build_behavior(parsed: Optional[dict], reply_text: str,
         if isinstance(raw, dict) and (raw.get("intent") or raw.get("actions")):
             behavior = dict(raw)
             behavior.setdefault("relevance", 1.0)
+            intent_name = str(behavior.get("intent") or "").strip().lower()
+            # 未知意图直接丢弃：宁可不出行为，也不让野意图进入行为层
+            if intent_name and intent_name not in _VALID_BEHAVIOR_INTENTS:
+                return None
             return behavior
     text = (reply_text or "").strip()
     if text:
@@ -537,4 +559,6 @@ def _fallback_intent(reply_text: str, emotion_state: Optional[dict],
 
 
 __all__ = ["QuestResponsePlanner"]
+
+
 

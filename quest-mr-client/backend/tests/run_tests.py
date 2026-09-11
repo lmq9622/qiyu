@@ -37,6 +37,8 @@ from tests.test_behavior import (  # noqa: E402
     test_bridge_tick_emits_events_and_state,
     test_bridge_cancel_emits_cancelled_events,
     test_build_context_from_world_and_character_state,
+    test_llm_behavior_intent_is_accepted_and_unknown_is_dropped,
+    test_keyword_hint_produces_behavior_and_plain_talk_does_not,
 )
 from tests.test_gateway import (  # noqa: E402
     test_autonomy_request_emits_optional_speech,
@@ -116,6 +118,8 @@ def main() -> int:
         test_bridge_tick_emits_events_and_state,
         test_bridge_cancel_emits_cancelled_events,
         test_build_context_from_world_and_character_state,
+        test_llm_behavior_intent_is_accepted_and_unknown_is_dropped,
+        test_keyword_hint_produces_behavior_and_plain_talk_does_not,
     ]
     for case in cases:
         print(f"RUN {case.__name__}")
@@ -127,6 +131,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 
