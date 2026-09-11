@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.AI;
 
 namespace Qiyu.Quest.Behavior
 {
@@ -19,6 +20,15 @@ namespace Qiyu.Quest.Behavior
         [SerializeField] private float armDownBias = 0.20f;
         [SerializeField] private float forearmForwardBias = 0.30f;
 
+        [Header("程序化行走（项目暂无 Walk/Run 动作资产时的替代）")]
+        [SerializeField] private bool proceduralWalk = true;
+        [SerializeField] private float strideLengthMeters = 1.4f;
+        [SerializeField] private float maxLegSwingDeg = 24f;
+        [SerializeField] private float maxKneeBendDeg = 34f;
+        [SerializeField] private float maxArmSwingDeg = 16f;
+        [SerializeField] private float hipsBobMeters = 0.02f;
+        [SerializeField] private float walkSpeedReference = 1.1f;
+
         public bool Active { get; private set; }
 
         private Transform _hips;
@@ -30,6 +40,18 @@ namespace Qiyu.Quest.Behavior
         private Transform _rightLowerArm;
         private Transform _leftHand;
         private Transform _rightHand;
+        private Transform _leftUpperLeg;
+        private Transform _rightUpperLeg;
+        private Transform _leftLowerLeg;
+        private Transform _rightLowerLeg;
+        private Quaternion _leftUpperLegRest;
+        private Quaternion _rightUpperLegRest;
+        private Quaternion _leftLowerLegRest;
+        private Quaternion _rightLowerLegRest;
+        private Vector3 _hipsRestPosition;
+        private float _stridePhase;
+        private float _lastLoggedSpeed = -1f;
+        private NavMeshAgent _agent;
         private Quaternion _hipsRest;
         private Quaternion _chestRest;
         private Quaternion _headRest;
@@ -48,6 +70,11 @@ namespace Qiyu.Quest.Behavior
         private Vector3 _currentRightUpper;
         private Vector3 _currentLeftLower;
         private Vector3 _currentRightLower;
+        private Vector3 _currentLeftUpperLeg;
+        private Vector3 _currentRightUpperLeg;
+        private Vector3 _currentLeftLowerLeg;
+        private Vector3 _currentRightLowerLeg;
+        private float _currentBob;
 
         private void Awake()
         {
@@ -174,6 +201,51 @@ namespace Qiyu.Quest.Behavior
                     break;
             }
 
+            // 程序化行走层：用真实移动速度驱动腿摆/膝弯/摆臂/身体起伏，避免"滑步"
+            var walkLegLeft = Vector3.zero;
+            var walkLegRight = Vector3.zero;
+            var walkKneeLeft = Vector3.zero;
+            var walkKneeRight = Vector3.zero;
+            var targetBob = 0f;
+            if (proceduralWalk)
+            {
+                var speed = _agent != null ? _agent.velocity.magnitude : 0f;
+                if (speed > 0.05f)
+                {
+                    _stridePhase += speed / Mathf.Max(0.2f, strideLengthMeters)
+                                    * Mathf.PI * 2f * Time.deltaTime;
+                    if (_stridePhase > Mathf.PI * 2f)
+                    {
+                        _stridePhase -= Mathf.PI * 2f;
+                    }
+                    var amp = Mathf.Clamp01(speed / Mathf.Max(0.2f, walkSpeedReference));
+                    var swing = maxLegSwingDeg * amp;
+                    var knee = maxKneeBendDeg * amp;
+                    var armSwing = maxArmSwingDeg * amp;
+                    var sinPhase = Mathf.Sin(_stridePhase);
+                    walkLegLeft = new Vector3(swing * sinPhase, 0f, 0f);
+                    walkLegRight = new Vector3(-swing * sinPhase, 0f, 0f);
+                    walkKneeLeft = new Vector3(
+                        -knee * Mathf.Max(0f, Mathf.Sin(_stridePhase + Mathf.PI * 0.5f)), 0f, 0f);
+                    walkKneeRight = new Vector3(
+                        -knee * Mathf.Max(0f, Mathf.Sin(_stridePhase - Mathf.PI * 0.5f)), 0f, 0f);
+                    targetLeftUpper += new Vector3(-armSwing * sinPhase, 0f, 0f);
+                    targetRightUpper += new Vector3(armSwing * sinPhase, 0f, 0f);
+                    targetBob = Mathf.Abs(sinPhase) * hipsBobMeters;
+                    if (_lastLoggedSpeed <= 0.05f)
+                    {
+                        Debug.Log($"[QiyuProceduralFallback] 程序化行走启动 speed={speed:F2}m/s " +
+                                  $"步幅={strideLengthMeters:F2}m");
+                    }
+                }
+                else if (_lastLoggedSpeed > 0.05f)
+                {
+                    _stridePhase = 0f;
+                    Debug.Log("[QiyuProceduralFallback] 程序化行走停止，回到静止姿态");
+                }
+                _lastLoggedSpeed = speed;
+            }
+
             var blend = 1f - Mathf.Exp(-blendSpeed * Time.deltaTime);
             _currentHips = Vector3.Lerp(_currentHips, targetHips, blend);
             _currentChest = Vector3.Lerp(_currentChest, targetChest, blend);
@@ -182,6 +254,10 @@ namespace Qiyu.Quest.Behavior
             _currentRightUpper = Vector3.Lerp(_currentRightUpper, targetRightUpper, blend);
             _currentLeftLower = Vector3.Lerp(_currentLeftLower, targetLeftLower, blend);
             _currentRightLower = Vector3.Lerp(_currentRightLower, targetRightLower, blend);
+            _currentLeftUpperLeg = Vector3.Lerp(_currentLeftUpperLeg, walkLegLeft, blend);
+            _currentRightUpperLeg = Vector3.Lerp(_currentRightUpperLeg, walkLegRight, blend);
+            _currentLeftLowerLeg = Vector3.Lerp(_currentLeftLowerLeg, walkKneeLeft, blend);
+            _currentRightLowerLeg = Vector3.Lerp(_currentRightLowerLeg, walkKneeRight, blend);
 
             Apply(_hips, _hipsRest, _currentHips);
             Apply(_chest, _chestRest, _currentChest);
@@ -190,6 +266,15 @@ namespace Qiyu.Quest.Behavior
             Apply(_rightUpperArm, _rightUpperRest, _currentRightUpper);
             Apply(_leftLowerArm, _leftLowerRest, _currentLeftLower);
             Apply(_rightLowerArm, _rightLowerRest, _currentRightLower);
+            Apply(_leftUpperLeg, _leftUpperLegRest, _currentLeftUpperLeg);
+            Apply(_rightUpperLeg, _rightUpperLegRest, _currentRightUpperLeg);
+            Apply(_leftLowerLeg, _leftLowerLegRest, _currentLeftLowerLeg);
+            Apply(_rightLowerLeg, _rightLowerLegRest, _currentRightLowerLeg);
+            if (_hips != null)
+            {
+                _currentBob = Mathf.Lerp(_currentBob, targetBob, blend);
+                _hips.localPosition = _hipsRestPosition + Vector3.up * _currentBob;
+            }
         }
 
         private void Initialize()
@@ -207,11 +292,21 @@ namespace Qiyu.Quest.Behavior
             _rightLowerArm = animator.GetBoneTransform(HumanBodyBones.RightLowerArm);
             _leftHand = animator.GetBoneTransform(HumanBodyBones.LeftHand);
             _rightHand = animator.GetBoneTransform(HumanBodyBones.RightHand);
+            _leftUpperLeg = animator.GetBoneTransform(HumanBodyBones.LeftUpperLeg);
+            _rightUpperLeg = animator.GetBoneTransform(HumanBodyBones.RightUpperLeg);
+            _leftLowerLeg = animator.GetBoneTransform(HumanBodyBones.LeftLowerLeg);
+            _rightLowerLeg = animator.GetBoneTransform(HumanBodyBones.RightLowerLeg);
+            _agent = GetComponentInParent<NavMeshAgent>();
             if (relaxedArmBaseline)
             {
                 ApplyRelaxedArmBaseline();
             }
             _hipsRest = RestOf(_hips);
+            _hipsRestPosition = _hips != null ? _hips.localPosition : Vector3.zero;
+            _leftUpperLegRest = RestOf(_leftUpperLeg);
+            _rightUpperLegRest = RestOf(_rightUpperLeg);
+            _leftLowerLegRest = RestOf(_leftLowerLeg);
+            _rightLowerLegRest = RestOf(_rightLowerLeg);
             _chestRest = RestOf(_chest);
             _headRest = RestOf(_head);
             _leftUpperRest = RestOf(_leftUpperArm);
@@ -309,6 +404,11 @@ namespace Qiyu.Quest.Behavior
         }
     }
 }
+
+
+
+
+
 
 
 
