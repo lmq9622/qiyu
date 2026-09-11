@@ -48,6 +48,11 @@ namespace Qiyu.Quest.Networking
         public event Action SessionEstablished;
         public event Action<JObject> OnAgentSpeech;
         public event Action<JObject> OnAvatarIntent;
+        /// <summary>Behavior 层：计划 / 单个动作 / 动作事件 / 状态快照。</summary>
+        public event Action<JObject> OnBehaviorPlan;
+        public event Action<JObject> OnBehaviorAction;
+        public event Action<JObject> OnBehaviorEvent;
+        public event Action<JObject> OnBehaviorState;
         public event Action<JObject> OnSpatialAction;
         public event Action<JObject> OnCharacterState;
         public event Action<JObject> OnAutonomyResult;
@@ -322,7 +327,8 @@ namespace Qiyu.Quest.Networking
                 "world_state_v1", "avatar_intent_v1", "spatial_action_v1",
                 "character_schema_v1_1", "behavior_state_v1_1",
                 "interaction_events_v1_1", "autonomy_request_v1_1",
-                "world_state_delta_v1_1", "user.text", "barge_in"
+                "world_state_delta_v1_1", "user.text", "barge_in",
+                "behavior_v1", "behavior_plan_v1"
             };
             var payload = new JObject
             {
@@ -403,6 +409,20 @@ namespace Qiyu.Quest.Networking
                     break;
                 case "spatial.action":
                     OnSpatialAction?.Invoke(envelope.payload);
+                    break;
+                case "server.behavior_plan":
+                    Debug.Log($"[QuestWS] behavior plan intent=" +
+                              $"{envelope.payload.Value<string>("intent")}");
+                    OnBehaviorPlan?.Invoke(envelope.payload);
+                    break;
+                case "server.behavior_action":
+                    OnBehaviorAction?.Invoke(envelope.payload);
+                    break;
+                case "server.behavior_event":
+                    OnBehaviorEvent?.Invoke(envelope.payload);
+                    break;
+                case "server.behavior_state":
+                    OnBehaviorState?.Invoke(envelope.payload);
                     break;
                 case "character.state":
                     OnCharacterState?.Invoke(envelope.payload);
@@ -490,3 +510,5 @@ namespace Qiyu.Quest.Networking
         }
     }
 }
+
+

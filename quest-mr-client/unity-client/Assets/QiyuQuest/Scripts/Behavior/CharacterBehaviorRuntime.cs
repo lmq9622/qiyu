@@ -932,12 +932,59 @@ namespace Qiyu.Quest.Behavior
                 renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             }
             var isHuman = animator.avatar != null && animator.avatar.isHuman;
+            var facing = isHuman ? AutoFixModelFacing(animator, model.transform) : 0f;
             Debug.Log($"[QiyuAvatar] 已载入角色模型 {prefab.name} humanoid={isHuman} " +
-                      $"yawOffset={avatarModelYawOffset:F0}");
+                      $"yawOffset={avatarModelYawOffset:F0} 自动纠正={facing:F0}°");
             if (!isHuman)
             {
                 Debug.LogWarning("[QiyuAvatar] Avatar 不是 Humanoid，程序化动作/重定向不可用");
             }
+        }
+
+        /// <summary>
+        /// 判定模型正反并自动纠正。MMD 模型导出 FBX 后经常背对 Unity 前向，
+        /// 用“脚趾相对脚踝的朝向”判断最稳：脚趾指哪，角色就朝哪。
+        /// 返回自动追加的偏航角度（0 或 180）。
+        /// </summary>
+        private float AutoFixModelFacing(Animator animator, Transform model)
+        {
+            var foot = animator.GetBoneTransform(HumanBodyBones.LeftFoot);
+            var toes = animator.GetBoneTransform(HumanBodyBones.LeftToes);
+            if (foot == null || toes == null)
+            {
+                Debug.Log("[QiyuAvatar] 缺少脚/脚趾骨骼，跳过朝向自检（保持 yawOffset）");
+                return 0f;
+            }
+            var direction = toes.position - foot.position;
+            direction.y = 0f;
+            if (direction.sqrMagnitude < 1e-4f)
+            {
+                return 0f;
+            }
+            direction.Normalize();
+            var dot = Vector3.Dot(direction, avatarRoot.forward);
+            if (dot >= 0f)
+            {
+                Debug.Log($"[QiyuAvatar] 模型朝向正确 dot={dot:F2}");
+                return 0f;
+            }
+            model.localRotation *= Quaternion.Euler(0f, 180f, 0f);
+            Debug.Log($"[QiyuAvatar] 模型原本背对前方 dot={dot:F2}，已自动旋转 180°");
+            return 180f;
+        }
+
+        /// <summary>
+        /// 外部（后端 Behavior 层）注入一条高层行为指令。
+        /// 只接受语义目标（goal/target/attention/emotion），
+        /// 不接受坐标、骨骼、Animator 参数或 BlendShape 数值。
+        /// </summary>
+        public void ApplyExternalIntent(AvatarIntentData directive)
+        {
+            if (directive == null)
+            {
+                return;
+            }
+            HandleHumanDirective(directive);
         }
 
         /// <summary>
@@ -976,6 +1023,8 @@ namespace Qiyu.Quest.Behavior
                 humanAvatarInteraction = gameObject.AddComponent<HumanAvatarInteractionController>();
             if (GetComponent<HumanMotionSync>() == null)
                 gameObject.AddComponent<HumanMotionSync>();
+            if (GetComponent<BehaviorActionBridge>() == null)
+                gameObject.AddComponent<BehaviorActionBridge>();
 
             if (avatarRoot == null)
             {
@@ -1073,3 +1122,6 @@ namespace Qiyu.Quest.Behavior
         }
     }
 }
+
+
+
