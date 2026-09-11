@@ -90,3 +90,28 @@ Material         = Import Standard（外部材质）
 验收用模型见 [ACCEPTANCE_AVATAR.md](ACCEPTANCE_AVATAR.md)：
 允许修改、禁止二次配布、禁止拆件改造、禁止商用。
 **模型本体不入库**，只在本地转换与验收。
+## 白模问题（已修）
+
+第一次导入后模型是白模，两个原因叠加：
+
+1. **FBX 里根本没有贴图节点**：mmd_tools 用 `mmd_shader` 自定义节点组，
+   Blender 的 FBX 导出器追踪不到贴图（导出的 FBX `Video=0`）。
+   → `convert_pmx.py` 现在会把材质重建成标准 Principled BSDF，
+   并把基础贴图接进 Base Color，再用 `embed_textures=True` 把贴图嵌进 FBX。
+2. **Unity 不会自动绑定 MMD 的中文贴图引用**：即便贴图被提取到
+   `QiyuAvatarModel.fbm/`，材质的 `m_Texture` 仍然是 0（白模）。
+   → Blender 侧额外导出 `QiyuAvatarModel.materials.json`（材质→贴图映射），
+   Unity 侧由 `QiyuAvatarMaterialBinder` 在打包前显式赋值。
+
+打包日志应出现：
+
+```text
+[QiyuAvatarMat] 已绑定 24/24 个材质贴图
+```
+
+排查命令（应全部非 0）：
+
+```powershell
+Get-ChildItem .\Materials\*.mat | ForEach-Object {
+  Select-String -Path $_ -Pattern 'm_Texture: \{fileID: (\d+)' }
+```
