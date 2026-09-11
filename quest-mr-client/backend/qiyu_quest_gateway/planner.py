@@ -147,6 +147,8 @@ class QuestResponsePlanner:
                         return {
                             "avatar_intent": intent,
                             "spatial_action": action,
+                            "behavior": _build_behavior(parsed, reply_text,
+                                                        emotion_state),
                             "source": "llm",
                         }
                     logger.warning("[QuestPlanner] LLM 输出无法通过 schema 校验，使用 fallback")
@@ -154,7 +156,68 @@ class QuestResponsePlanner:
                 logger.warning(f"[QuestPlanner] LLM 规划失败，使用 fallback: {e}")
 
         intent = _fallback_intent(reply_text, emotion_state, user_visible)
-        return {"avatar_intent": intent, "spatial_action": None, "source": "fallback"}
+        return {
+            "avatar_intent": intent,
+            "spatial_action": None,
+            "behavior": _build_behavior(None, reply_text, emotion_state),
+            "source": "fallback",
+        }
+
+
+#: 台词关键词 → 行为意图。用于 LLM 没有给出 behavior 时的"行为相关性"门控：
+#: 命中才触发行为，没命中就保持自然状态（提示词第二十节）。
+_BEHAVIOR_HINTS: list[tuple[tuple[str, ...], str, float]] = [
+    (("你好", "您好", "嗨", "早上好", "晚上好", "欢迎回来", "hello", "hi"),
+     "greeting", 0.8),
+    (("哈哈", "笑死", "哈哈哈", "嘿嘿"), "laugh", 0.8),
+    (("抱歉", "对不起", "不好意思"), "apologize", 0.7),
+    (("谢谢", "多谢", "感谢"), "acknowledge", 0.6),
+    (("过来", "陪我", "一起坐", "坐一会", "来找我"), "sit_with_user", 0.75),
+    (("跟我来", "带你去", "这边"), "come_here", 0.7),
+    (("难过", "伤心", "不开心", "委屈", "想哭"), "comfort", 0.8),
+    (("讨厌", "烦人", "坏蛋", "你坏"), "tease", 0.7),
+    (("生气", "愤怒", "气死"), "angry", 0.75),
+    (("惊讶", "真的吗", "不会吧", "天啊"), "surprised", 0.7),
+    (("害羞", "别说了", "不好意思啦"), "shy", 0.7),
+    (("不懂", "为什么呀", "什么意思", "嗯？"), "confused", 0.6),
+    (("累了", "困了", "好困"), "tired", 0.7),
+    (("等等", "稍等", "思考"), "think", 0.5),
+]
+
+
+def _build_behavior(parsed: Optional[dict], reply_text: str,
+                    emotion_state: Optional[dict]) -> Optional[dict]:
+    """产出 BehaviorIntent（dict）。
+
+    优先级：LLM 显式 behavior > 关键词相关性门控 > 无行为（None）。
+    宁可不出行为，也不要"说一句话播一个动作"。
+    """
+    if isinstance(parsed, dict):
+        raw = parsed.get("behavior")
+        if isinstance(raw, dict) and (raw.get("intent") or raw.get("actions")):
+            behavior = dict(raw)
+            behavior.setdefault("relevance", 1.0)
+            return behavior
+    text = (reply_text or "").strip()
+    if text:
+        for keywords, intent_name, intensity in _BEHAVIOR_HINTS:
+            if any(word in text for word in keywords):
+                return {
+                    "intent": intent_name,
+                    "intensity": intensity,
+                    "relevance": 1.0,
+                    "reason": f"keyword:{keywords[0]}",
+                }
+    emo = emotion_state or {}
+    joy = float(emo.get("joy") or 0.0)
+    sadness = float(emo.get("sadness") or 0.0)
+    if joy >= 70:
+        return {"intent": "happy", "intensity": 0.6, "relevance": 0.6,
+                "reason": "emotion:joy"}
+    if sadness >= 70:
+        return {"intent": "sad", "intensity": 0.6, "relevance": 0.6,
+                "reason": "emotion:sadness"}
+    return None
 
 
 def _collect_targets(world_state: Optional[dict]) -> list[dict]:
@@ -474,3 +537,4 @@ def _fallback_intent(reply_text: str, emotion_state: Optional[dict],
 
 
 __all__ = ["QuestResponsePlanner"]
+

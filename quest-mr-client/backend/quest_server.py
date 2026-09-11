@@ -144,6 +144,7 @@ async def handle_quest_user_text(session, text: str, meta: dict) -> dict:
         "pieces": pieces,
         "avatar_intent": intent.model_dump(mode="json") if intent is not None else None,
         "spatial_action": action.model_dump(mode="json") if action is not None else None,
+        "behavior": plan.get("behavior"),
         "need_vision": bool((result.get("decision") or {}).get("need_vision")),
         "vision_query": str((result.get("decision") or {}).get("vision_query") or ""),
     }
@@ -234,6 +235,7 @@ async def handle_quest_autonomy_request(session, request: dict) -> dict:
         "pieces": pieces,
         "avatar_intent": intent.model_dump(mode="json") if intent is not None else None,
         "spatial_action": action.model_dump(mode="json") if action is not None else None,
+        "behavior": plan.get("behavior"),
     }
 
 
@@ -330,3 +332,5 @@ if __name__ == "__main__":
         port=int(os.getenv("QIYU_QUEST_PORT", "8766")),
         log_level="info",
     )
+
+

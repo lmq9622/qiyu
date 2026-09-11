@@ -51,6 +51,9 @@ class QuestSession:
     pending_vision_text: str = ""
     pending_vision_request: Optional[object] = None
     tts_enabled: bool = True
+    # Behavior 层：会话级行为桥与 8Hz 调度心跳（由网关创建/回收）
+    behavior_bridge: Optional[object] = None
+    behavior_task: Optional[asyncio.Task] = None
 
     def to_public_dict(self) -> dict:
         return {
@@ -139,3 +142,4 @@ class SessionRegistry:
 
     def count(self) -> int:
         return len(self._sessions)
+

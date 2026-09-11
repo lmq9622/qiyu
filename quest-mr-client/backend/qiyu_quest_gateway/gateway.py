@@ -36,6 +36,11 @@ from qiyu_quest_gateway.protocol import (
     Envelope,
     EnvelopeError,
 )
+from qiyu_quest_gateway.behavior import (
+    BehaviorBridge,
+    BehaviorIntent,
+    build_context,
+)
 from qiyu_quest_gateway.session import QuestSession, SessionRegistry
 from qiyu_quest_gateway.models import (
     AutonomyRequest,
@@ -84,6 +89,7 @@ class QuestWebSocketGateway:
                 return
             first = first_item
             session = await self._handle_hello(ws, first)
+            self._start_behavior_ticker(ws, session)
             await self._send(
                 ws, session,
                 first.reply(
@@ -108,6 +114,8 @@ class QuestWebSocketGateway:
                             "world_state_delta_v1_1": True,
                             "human_motion_state_v1_1": True,
                             "user_body_v1": True,
+                            "behavior_v1": True,
+                            "behavior_plan_v1": True,
                         },
                     },
                     session=session.session_id,
@@ -187,6 +195,11 @@ class QuestWebSocketGateway:
                         session.autonomy_task.cancel()
                     session.autonomy_task = None
                     session.barge_in_epoch += 1
+                    if session.behavior_bridge is not None:
+                        try:
+                            await session.behavior_bridge.cancel("barge_in")
+                        except Exception as _e:  # noqa: BLE001
+                            logger.warning(f"[QuestGateway] 行为取消失败: {_e}")
                     if self.on_barge_in is not None:
                         try:
                             await self.on_barge_in(session)
@@ -219,6 +232,7 @@ class QuestWebSocketGateway:
                 if session.autonomy_task is not None and not session.autonomy_task.done():
                     session.autonomy_task.cancel()
                 session.autonomy_task = None
+                self._stop_behavior_ticker(session)
                 self.registry.drop(session.session_id)
                 self.world_states.drop(session.session_id)
             try:
@@ -579,6 +593,9 @@ class QuestWebSocketGateway:
             await self._send(ws, session, request.reply(
                 "avatar.intent", avatar_intent, session=session.session_id))
 
+        # Behavior 层：意图 → 计划 → 调度 → 下发（失败不影响台词与 TTS）
+        await self._apply_behavior(ws, session, result)
+
         spatial_action = result.get("spatial_action")
         if isinstance(spatial_action, dict):
             await self._send(ws, session, request.reply(
@@ -658,6 +675,89 @@ class QuestWebSocketGateway:
             except Exception:
                 pass
             raise
+
+    # ------------------------------------------------------------------ Behavior 层
+    @staticmethod
+    def _session_supports_behavior(session: QuestSession) -> bool:
+        """能力协商：只有声明 behavior_v1 的客户端才启用行为层。
+
+        这样老客户端与协议测试完全不受影响，行为消息不会污染它们的序列。
+        """
+        caps = session.capabilities or {}
+        if isinstance(caps, dict):
+            if caps.get("behavior_v1"):
+                return True
+            features = caps.get("features") or []
+            return "behavior_v1" in features
+        return False
+
+    def _start_behavior_ticker(self, ws: WebSocket,
+                               session: QuestSession) -> None:
+        """准备行为桥（不启动心跳；有真实计划时才启动，避免空转发消息）。"""
+        if not self._session_supports_behavior(session):
+            return
+
+        async def send(message_type: str, payload: dict) -> None:
+            try:
+                await self._send(ws, session, Envelope(
+                    message_type, payload, session=session.session_id))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[QuestGateway] 行为消息发送失败: {e}")
+
+        session.behavior_bridge = BehaviorBridge(send)
+
+    def _ensure_behavior_ticker(self, session: QuestSession) -> None:
+        bridge = session.behavior_bridge
+        if bridge is None:
+            return
+        if session.behavior_task is not None and not session.behavior_task.done():
+            return
+
+        async def loop() -> None:
+            interval = 1.0 / max(1.0, bridge.tick_hz)
+            try:
+                while True:
+                    await asyncio.sleep(interval)
+                    await bridge.tick(interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[QuestGateway] 行为 ticker 退出: {e}")
+
+        session.behavior_task = asyncio.create_task(loop())
+
+    def _stop_behavior_ticker(self, session: QuestSession) -> None:
+        task = session.behavior_task
+        if task is not None and not task.done():
+            task.cancel()
+        session.behavior_task = None
+
+    async def _apply_behavior(self, ws: WebSocket, session: QuestSession,
+                              result: dict) -> None:
+        """一轮对话后把高层行为意图展开成计划并下发。"""
+        bridge = session.behavior_bridge
+        if bridge is None:
+            return
+        raw = result.get("behavior")
+        intent = None
+        if isinstance(raw, dict):
+            try:
+                intent = BehaviorIntent(**raw)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[QuestGateway] behavior intent 校验失败: {e}")
+                intent = None
+        context = build_context(session.world_state, session.character_state,
+                                bridge.runtime.channel_locks())
+        plan = await bridge.apply_intent(intent, context)
+        if plan is not None:
+            self._ensure_behavior_ticker(session)
+            logger.info(
+                f"[QuestGateway] behavior plan session={session.session_id} "
+                f"intent={plan.intent} intensity={plan.intensity:.2f}")
+        elif intent is not None:
+            logger.info(
+                f"[QuestGateway] behavior skip intent={intent.intent} "
+                f"reason={bridge.last_rejection}")
 
     async def _handle_hello(self, ws: WebSocket, msg: Envelope) -> QuestSession:
         p = msg.payload or {}
@@ -877,3 +977,9 @@ def _clamp(value, lo: float, hi: float, default: float) -> float:
 
 
 __all__ = ["QuestWebSocketGateway"]
+
+
+
+
+
+
