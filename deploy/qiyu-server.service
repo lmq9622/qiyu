@@ -1,0 +1,22 @@
+[Unit]
+Description=Qiyu AI Companion (Linux Server Branch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__APP_DIR__
+Environment=QIYU_HOST=0.0.0.0
+Environment=QIYU_PORT=__PORT__
+Environment=QIYU_DATA_DIR=__DATA_DIR__
+ExecStart=__PYTHON__ __APP_DIR__/server_entry.py
+Restart=always
+RestartSec=5
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=__DATA_DIR__
+
+[Install]
+WantedBy=multi-user.target
