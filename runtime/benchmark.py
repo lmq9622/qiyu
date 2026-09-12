@@ -38,6 +38,11 @@ class BenchmarkResult:
     decode_tok_s: float = 0.0       # 估算/实测解码速度
     score: float = 0.0              # 综合分（越高越优）
     reason: str = ""
+    # —— 实测元数据（measured=True 时由 backend.bench_inference() 回填，规格§/QA6）——
+    load_ms: float = 0.0            # 模型加载耗时（首轮实测）
+    rss_delta_mb: float = 0.0       # 加载前后进程 RSS 增量
+    rss_mb: float = 0.0             # 当前进程 RSS
+    model: str = ""                 # 实际模型文件名/标签
 
     def to_dict(self) -> dict:
         return {
@@ -46,6 +51,10 @@ class BenchmarkResult:
             "measured": self.measured,
             "ttft_ms": round(self.ttft_ms, 1),
             "decode_tok_s": round(self.decode_tok_s, 1),
+            "load_ms": round(self.load_ms, 1),
+            "rss_delta_mb": round(self.rss_delta_mb, 1),
+            "rss_mb": round(self.rss_mb, 1),
+            "model": self.model,
             "score": round(self.score, 3),
             "reason": self.reason,
         }
@@ -105,7 +114,13 @@ class MicroBenchmark:
                 results.append(BenchmarkResult(
                     backend=cap.backend, device=cap.device, measured=True,
                     ttft_ms=ttft, decode_tok_s=tok_s, score=score,
-                    reason=f"实测微基准（TTFT={ttft:.0f}ms, {tok_s:.1f} tok/s）",
+                    load_ms=float(measured.get("load_ms") or 0.0),
+                    rss_delta_mb=float(measured.get("rss_delta_mb") or 0.0),
+                    rss_mb=float(measured.get("rss_mb") or 0.0),
+                    model=str(measured.get("model") or ""),
+                    reason=f"实测微基准（TTFT={ttft:.0f}ms, {tok_s:.1f} tok/s, "
+                           f"load={float(measured.get('load_ms') or 0.0):.0f}ms, "
+                           f"rss={float(measured.get('rss_mb') or 0.0):.0f}MB）",
                 ))
             else:
                 results.append(self.estimate(cap, prof))

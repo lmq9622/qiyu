@@ -571,6 +571,7 @@
                                 <!-- dup removed -->
                                 <span class="tone-pill tone-pill-yellow" title="嘿嘿阈值：需模型验证为 uncensored 后才可调；实际强度 = 档位 × 角色开放度 × 好感度"><i>嘿嘿</i><span class="tone-seg" id="chatNaughtySeg"><button class="tseg active" data-v="off" onclick="app.setLevel('naughty','off')">off</button><button class="tseg" data-v="low" onclick="app.setLevel('naughty','low')">low</button><button class="tseg" data-v="mid" onclick="app.setLevel('naughty','mid')">mid</button><button class="tseg" data-v="high" onclick="app.setLevel('naughty','high')">high</button><button class="tseg" data-v="ultra" onclick="app.setLevel('naughty','ultra')">ultra</button></span></span>
                                 <span class="tone-pill" title="思考强度：off=直接输出（首字最快）；low/mid/high/ultra=开启推理并按强度给思考预算"><i>思考</i><span class="tone-seg" id="chatThinkingSeg"><button class="tseg active" data-v="off" onclick="app.setLevel('thinking','off')">off</button><button class="tseg" data-v="low" onclick="app.setLevel('thinking','low')">low</button><button class="tseg" data-v="mid" onclick="app.setLevel('thinking','mid')">mid</button><button class="tseg" data-v="high" onclick="app.setLevel('thinking','high')">high</button><button class="tseg" data-v="ultra" onclick="app.setLevel('thinking','ultra')">ultra</button></span></span>
+                            </div>
                             <div style="display:flex;gap:12px;align-items:flex-end;max-width:768px;margin:0 auto;">
                                 <div id="emojiPanel" style="display:none;position:absolute;bottom:calc(100% + 8px);left:8px;width:min(340px, calc(100vw - 40px));background:rgba(255,255,255,0.72);backdrop-filter:blur(28px) saturate(1.8);-webkit-backdrop-filter:blur(28px) saturate(1.8);border:1px solid rgba(255,255,255,0.55);border-radius:var(--radius-xl);box-shadow:0 24px 64px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.5);padding:12px;z-index:60;max-height:300px;overflow-y:auto;"></div>
                                 <button class="chat-expand-btn" id="chatImageBtn" onclick="app.pickImages()" title="发送图片"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></button>
@@ -813,24 +814,35 @@
                             <div class="setting-section glass-strong">
                                 <div class="setting-section-header"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg><h3>LLM 设置</h3></div>
                                 <div class="setting-hint">支持任何兼容 OpenAI API 格式的大模型服务。填写 base_url 时请以 <code>/v1</code> 结尾。</div>
+                                <div class="setting-section-header" style="margin-top:18px;"><h3 style="margin:0;">MiniMind 小脑设置（实时决策/短回复）</h3></div>
+                                <div class="form-group">
+                                    <div class="toggle-row"><div class="toggle-info"><div class="toggle-title">强制官方 MiniMind D6</div><div class="toggle-desc">默认开启：使用随包的 tag-D5 基座 + D6 LoRA，不因 GGUF 速度分高而抢走小脑。关闭后允许 Auto 选择 GGUF。</div></div><label class="toggle-switch"><input type="checkbox" id="settingMiniOfficial" onchange="app.saveSettings(true)"><span class="track"></span></label></div>
+                                </div>
+                                <div class="form-group"><label class="form-label">当前小脑</label><input type="text" class="form-input" id="miniStatusText" readonly value="读取中..." style="background:rgba(255,255,255,.03);"></div>
+                                <div class="form-group">
+                                    <label class="form-label">模型供应商</label>
+                                    <select class="form-select" id="settingProvider" style="flex:1;" onchange="app.applyProvider(true)">
+                                        <option value="custom">自定义</option>
+                                    </select>
+                                </div>
                                 <div class="form-group">
                                     <label class="form-label">API 地址</label>
                                     <input type="text" class="form-input" id="settingApiUrl" placeholder="http://192.168.2.6:8081/v1" oninput="app.markLLMChanged()">
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label">API Key <span class="hint">可选</span></label>
-                                    <input type="password" class="form-input" id="settingApiKey" placeholder="sk-..." oninput="app.markLLMChanged()">
+                                    <input type="password" class="form-input" id="settingApiKey" placeholder="sk-...（可留空，原样发给 API）" oninput="app.markLLMChanged(); app.debounceModelRefresh()">
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label">模型选择</label>
                                     <div class="model-select-row">
-                                        <select class="form-select" id="settingModelSelect" style="flex:1;" onchange="app.markLLMChanged()">
-                                            <option value="">-- 点击刷新获取模型列表 --</option>
-                                        </select>
+                                        <input type="text" class="form-input" id="settingModelInput" list="modelListDl" placeholder="点击刷新自动填入，也可直接手输" oninput="app.markLLMChanged()" style="flex:1;">
+                                        <datalist id="modelListDl"></datalist>
                                         <button class="btn btn-secondary" id="modelRefreshBtn" onclick="app.loadModelList()">刷新列表</button>
                                     </div>
                                     <div style="margin-top:6px;font-size:0.75rem;color:var(--text-tertiary);">如果下拉列表无法加载，也可以手动输入模型名称</div>
                                 </div>
+                                <div class="form-group" id="providerExtraWrap" style="display:none;"></div>
                                 <div class="form-group">
                                     <label class="form-label">快速接入 <span class="hint">主流 API 预设：选一个自动填好接口和模型，只差填 Key</span></label>
                                     <div class="model-select-row">
@@ -2606,17 +2618,23 @@
             const s = this.state.settings;
             const llm = s.llm || {};
             document.getElementById('settingApiUrl').value = llm.base_url || LLM_API;
-            const sel = document.getElementById('settingModelSelect');
-            if (sel && llm.model) {
-                const opt = sel.querySelector(`option[value="${llm.model}"]`);
-                if (opt) opt.selected = true;
-                else {
-                    // 保存过的模型不在下拉里（列表还没刷过）：直接补一个选项并选中，免手动刷新
-                    const o = document.createElement('option');
-                    o.value = llm.model; o.textContent = llm.model;
-                    sel.appendChild(o); sel.value = llm.model;
+            const mi = document.getElementById('settingModelInput');
+            if (mi) mi.value = llm.model || '';
+            const provSel = document.getElementById('settingProvider');
+            if (provSel) {
+                const pid = llm.provider || 'custom';
+                let opt = provSel.querySelector(`option[value="${pid}"]`);
+                if (!opt) {
+                    const o = document.createElement('option'); o.value = pid; o.textContent = pid; provSel.appendChild(o);
                 }
+                provSel.value = pid;
             }
+            this.renderProviderExtra(llm.extra || {});
+            const mo = document.getElementById('settingMiniOfficial');
+            if (mo) mo.checked = s.minimind ? s.minimind.prefer_official !== false : true;
+            const st = document.getElementById('miniStatusText');
+            if (st && s.minimind) st.value = `基座 ${s.minimind.base_model || '-'} | LoRA ${s.minimind.adapter || '-'}（loaded=${!!s.minimind.adapter_loaded}）| 实际 backend=${s.minimind.backend || '-'}`;
+            const sel = document.getElementById('settingModelSelect'); // 兼容旧代码占位
             this.state.settings.llm = llm;
             this.state.settings.model = llm.model || '';
             document.getElementById('settingApiKey').value = llm.api_key || '';
@@ -2745,41 +2763,72 @@
 
         async loadModelList(silent) {
             const btn = (event && event.target) || document.getElementById('modelRefreshBtn');
-            const sel = document.getElementById('settingModelSelect');
-            const prevHtml = sel ? sel.innerHTML : '';
+            const inp = document.getElementById('settingModelInput');
             if (btn) { btn.disabled = true; btn.textContent = '加载中...'; }
             try {
-                const d = await this.api('GET', '/v1/models');
+                const url = encodeURIComponent((document.getElementById('settingApiUrl').value || '').trim());
+                const key = encodeURIComponent((document.getElementById('settingApiKey').value || '').trim());
+                const d = await this.api('GET', `/v1/models?url=${url}&api_key=${key}`);
                 const models = d.data || [];
-                const savedModel = ((this.state.settings && this.state.settings.llm && this.state.settings.llm.model) || (this.state.settings && this.state.settings.model) || '');
-                sel.innerHTML = models.length > 0
-                    ? models.map(m => `<option value="${this.esc(m.id)}">${this.esc(m.id)}</option>`).join('')
-                    : '<option value="">未获取到模型列表</option>';
-                if (savedModel) {
-                    const opt = sel.querySelector(`option[value="${savedModel}"]`);
-                    if (opt) opt.selected = true;
-                    else { const o = document.createElement('option'); o.value = savedModel; o.textContent = savedModel; sel.appendChild(o); sel.value = savedModel; }
-                }
-                if (!sel.value && models.length > 0) {
-                    sel.options[0].selected = true;
-                }
+                const dl = document.getElementById('modelListDl');
+                if (dl) dl.innerHTML = models.map(m => `<option value="${this.esc(m.id)}"></option>`).join('');
+                const cur = inp ? inp.value.trim() : '';
+                const first = models[0] && models[0].id;
+                // 已有值保留；没有值/值与列表无关且列表只有一个真实模型时自动填
+                if (inp && !cur && first) inp.value = first;
                 if (!silent) this.toast('模型列表已更新', 'success');
             } catch (e) {
-                if (prevHtml && sel) sel.innerHTML = prevHtml; // 拉取失败时保留已有选项，不丢已填模型
                 if (!silent) this.toast('获取模型列表失败: ' + e.message, 'error');
             }
             finally { if (btn) { btn.disabled = false; btn.innerHTML = '刷新列表'; } }
+        },
+
+        debounceModelRefresh() {
+            clearTimeout(this._modelRefreshTimer);
+            this._modelRefreshTimer = setTimeout(() => this.loadModelList(true), 500);
         },
 
         async loadLLMPresets() {
             try {
                 const d = await this.api('GET', '/v1/llm/presets');
                 this.state.llmPresets = d.data || [];
+                const prov = document.getElementById('settingProvider');
+                if (prov) prov.innerHTML = '<option value="custom">自定义</option>' + this.state.llmPresets.map(p => `<option value="${this.esc(p.id)}">${this.esc(p.name)}</option>`).join('');
                 const sel = document.getElementById('settingPreset');
                 if (sel) sel.innerHTML = '<option value="">-- 选择预设 --</option>' + this.state.llmPresets.map(p => `<option value="${this.esc(p.id)}">${this.esc(p.name)}</option>`).join('');
                 const rp = document.getElementById('settingRoutePreset');
                 if (rp) rp.innerHTML = '<option value="">-- 路由模型预设（选中自动填好，留空用主模型） --</option>' + this.state.llmPresets.map(p => `<option value="${this.esc(p.id)}">${this.esc(p.name)}</option>`).join('');
+                if (this.state.settings && this.state.settings.llm) this.applySettingsToUI();
             } catch (e) { console.warn('加载 LLM 预设失败:', e); }
+        },
+
+        renderProviderExtra(extra) {
+            const wrap = document.getElementById('providerExtraWrap');
+            if (!wrap) return;
+            const p = this.presetById();
+            const fields = (p && p.extra_fields) || [];
+            if (!fields.length) { wrap.style.display = 'none'; wrap.innerHTML=''; return; }
+            wrap.style.display = 'block';
+            wrap.innerHTML = fields.map(f => {
+                const v = (extra || {})[f.name] || '';
+                return `<div class="form-group"><label class="form-label">${this.esc(f.label)}</label><input type="text" class="form-input" id="extra_${this.esc(f.name)}" value="${this.esc(v)}" placeholder="${this.esc(f.placeholder||'')}" oninput="app.markLLMChanged()"></div>`;
+            }).join('');
+        },
+
+        presetById() {
+            const id = (document.getElementById('settingProvider') || {}).value;
+            return (this.state.llmPresets || []).find(x => x.id === id);
+        },
+
+        applyProvider(autoSave) {
+            const p = this.presetById();
+            const url = document.getElementById('settingApiUrl');
+            if (p && url) url.value = p.base_url;
+            this.renderProviderExtra({});
+            this.markLLMChanged();
+            if (autoSave) this.saveSettings(true);
+            // 换供应商后自动刷一次模型
+            this.loadModelList(true);
         },
 
         applyRoutePreset() {
@@ -2818,8 +2867,7 @@
 
         async verifyLLM() {
             const url = document.getElementById('settingApiUrl').value.trim() || LLM_API;
-            const sel = document.getElementById('settingModelSelect');
-            const model = (sel.value || '').trim() || 'qwen3.6-35b';
+            const model = (document.getElementById('settingModelInput').value || '').trim() || 'qwen3.6-35b';
             const apiKey = document.getElementById('settingApiKey').value.trim();
             const routeUrl = document.getElementById('settingRouteUrl').value.trim();
             const routeModel = document.getElementById('settingRouteModel').value.trim();
@@ -2876,15 +2924,23 @@
                 this.toast('请先点击「验证配置」验证模型连接', 'warning');
                 return;
             }
-            const sel = document.getElementById('settingModelSelect');
             const pl = this.state.settings.profanity_level || 'off';
             const nl = this.state.settings.naughty_level || 'off';
+            const extra = {};
+            document.querySelectorAll('#providerExtraWrap input').forEach(el => {
+                const k = el.id.replace(/^extra_/, '');
+                const v = el.value.trim();
+                if (v) extra[k] = v;
+            });
             const settings = {
+                llm_provider: (document.getElementById('settingProvider') || {}).value || 'custom',
                 llm_url: document.getElementById('settingApiUrl').value.trim() || LLM_API,
-                llm_model: (sel.value || '').trim() || 'qwen3.6-35b',
+                llm_model: (document.getElementById('settingModelInput').value || '').trim() || 'qwen3.6-35b',
+                llm_extra: extra,
                 llm_route_url: document.getElementById('settingRouteUrl').value.trim(),
                 llm_route_model: document.getElementById('settingRouteModel').value.trim(),
                 api_key: document.getElementById('settingApiKey').value.trim(),
+                realtime_prefer_official: !!document.getElementById('settingMiniOfficial').checked,
                 default_temperature: parseFloat(document.getElementById('settingGlobalTemp').value),
                 allow_profanity: pl !== 'off',
                 allow_naughty: nl !== 'off',
@@ -3375,4 +3431,3 @@
     </script>
 </body>
 </html>
-

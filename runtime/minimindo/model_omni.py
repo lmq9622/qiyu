@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from torch import nn
 from torch.nn import functional as F
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
-from transformers import SiglipImageProcessor, SiglipVisionModel, logging as hf_logging
+from transformers.utils import logging as hf_logging
 from .model_minimind import *
 
 
@@ -193,9 +193,11 @@ class MiniMindOmni(MiniMindForCausalLM):
             return None, None
         hf_logging.set_verbosity_error()
         try:
+            from transformers import SiglipVisionModel
             model = SiglipVisionModel.from_pretrained(path)
         except (RuntimeError, ValueError):
             return None, None
+        from transformers import SiglipImageProcessor
         processor = SiglipImageProcessor.from_pretrained(path)
         for p in model.parameters():
             p.requires_grad = False
@@ -328,6 +330,47 @@ class MiniMindOmni(MiniMindForCausalLM):
             return self.stream_generate(input_ids, eos_token_id, max_new_tokens, temperature, top_p, rp, use_cache, return_audio_codes, **args)
         tokens = list(self.stream_generate(input_ids, eos_token_id, max_new_tokens, temperature, top_p, rp, use_cache, return_audio_codes, **args))
         return tokens[-1] if tokens else input_ids
+
+    @torch.inference_mode()
+    def generate_text_sync(self, input_ids, eos_token_id=2, max_new_tokens=128,
+                           temperature=0.75, top_p=0.90, rp=1., use_cache=True, **args):
+        """文本-only 同步生成：与 stream_generate 等价但不用生成器。
+
+        Qiyu v0.0.26+ 实测发现 stream_generate 的生成器对象/帧析构会造成
+        文本已生成后仍有 ~20s 延迟；这里保留相同的前向与采样逻辑，但碰到
+        eos 立即返回，不消费/不析构生成器。
+        """
+        start_pos = input_ids.shape[1]
+        past_kvs = None
+        # 官方前向需要 8 层 audio buffer（全 pad，不生成音频）
+        audio_buffer = torch.full((1, 8, start_pos), self.audio_pad_token,
+                                  dtype=torch.long, device=input_ids.device)
+        while input_ids.shape[1] < start_pos + max_new_tokens:
+            if past_kvs is None or not use_cache:
+                out = self.forward(
+                    torch.cat((audio_buffer, input_ids.unsqueeze(1)), dim=1),
+                    past_key_values=past_kvs, use_cache=use_cache, **args)
+            else:
+                out = self.forward(
+                    torch.cat((audio_buffer[:, :, -1:], input_ids[:, -1:].unsqueeze(1)), dim=1),
+                    past_key_values=past_kvs, use_cache=use_cache, **args)
+            past_kvs = out.past_key_values
+            logits = out.logits[0, -1, :].clone() / (temperature + 1e-9)
+            logits[list(set(input_ids[0].tolist()))] /= rp
+            if top_p and top_p < 1.0:
+                sorted_l, sorted_i = torch.sort(logits, descending=True)
+                mask = torch.cumsum(F.softmax(sorted_l, dim=-1), dim=-1) > top_p
+                mask[1:], mask[0] = mask[:-1].clone(), False
+                logits[sorted_i[mask]] = -float('Inf')
+            text_token = torch.multinomial(F.softmax(logits, dim=-1), 1).item()
+            input_ids = torch.cat(
+                (input_ids, torch.tensor([[text_token]], device=input_ids.device)), dim=1)
+            audio_buffer = torch.cat(
+                (audio_buffer, torch.full((1, 8, 1), self.audio_pad_token,
+                                          dtype=torch.long, device=input_ids.device)), dim=2)
+            if text_token == eos_token_id:
+                break
+        return input_ids[:, start_pos:]
 
     def stream_generate(self, input_ids, eos_token_id, max_new_tokens, temperature, top_p, rp, use_cache, return_audio_codes=False, **args):
         start_pos, past_kvs, text_finished, first_finished = input_ids.shape[1], None, False, True

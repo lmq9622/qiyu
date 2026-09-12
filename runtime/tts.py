@@ -78,9 +78,12 @@ class WindowsSapiTTSProvider(AIProvider):
         )
         t0 = time.time()
         try:
+            _kwargs = {}
+            if os.name == "nt":
+                _kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             r = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=120, **_kwargs,
             )
             if r.returncode != 0 or not out_path.exists():
                 logger.warning(f"[TTS] System.Speech 合成失败: {r.stderr[:200]}")
@@ -91,6 +94,70 @@ class WindowsSapiTTSProvider(AIProvider):
             return {"path": str(out_path), "format": "wav", "duration_ms": int(dur * 1000), "engine": "windows-sapi"}
         except Exception as e:
             logger.warning(f"[TTS] 合成异常: {e}")
+            return None
+
+
+class WindowsSapiNativeTTSProvider(AIProvider):
+    """pythonnet 直接调 System.Speech（不每次启动 PowerShell，首包更快的真实实现）。"""
+
+    kind = ProviderKind.TTS
+    id = "windows-sapi-native"
+    name = "TTS（System.Speech Native）"
+
+    def probe(self) -> ProviderStatus:
+        try:
+            import clr  # noqa: F401
+            self._add_ref()
+            return ProviderStatus(True, backend="local", device="System.Speech.Native",
+                                  reason="pythonnet + System.Speech 可用")
+        except Exception as e:
+            return ProviderStatus(False, backend="", reason=f"pythonnet 不可用: {e}")
+
+    @staticmethod
+    def _add_ref() -> None:
+        import clr
+        try:
+            clr.AddReference("System.Speech")
+        except Exception:
+            # .NET Framework 全路径
+            path = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\System.Speech.dll"
+            clr.AddReference(path)
+
+    def status(self) -> ProviderStatus:
+        return self.probe()
+
+    async def synthesize(self, text: str, **kwargs) -> Optional[dict]:
+        text = (text or "").strip()
+        if not text:
+            return None
+        if not self.probe().available:
+            return None
+        try:
+            import asyncio
+            import clr
+            self._add_ref()
+            from System.Speech.Synthesis import SpeechSynthesizer
+            from System.IO import MemoryStream, SeekOrigin
+            speed = _clamp_float(kwargs.get("speed"), 0.5, 2.0, 1.0)
+            ms = MemoryStream()
+            synth = SpeechSynthesizer()
+            synth.Rate = max(-10, min(10, int((speed - 1.0) * 10)))
+            synth.SetOutputToWaveStream(ms)
+            t0 = time.time()
+            await asyncio.to_thread(synth.Speak, text)
+            ms.Seek(0, SeekOrigin.Begin)
+            data = ms.ToArray()
+            synth.Dispose()
+            out_name = f"tts_{int(time.time() * 1000)}.wav"
+            out_path = _tts_dir() / out_name
+            out_path.write_bytes(bytes(data))
+            from runtime.perf import perf_monitor
+            perf_monitor.record("tts_first_packet", value=(time.time() - t0) * 1000.0)
+            return {"path": str(out_path), "format": "wav",
+                    "duration_ms": int(_wav_duration(out_path) * 1000),
+                    "engine": "windows-sapi-native"}
+        except Exception as e:
+            logger.warning(f"[TTS] Native System.Speech 合成异常: {e}")
             return None
 
 
@@ -159,7 +226,10 @@ def _wav_duration(path: Path) -> float:
 
 
 def resolve_tts_provider():
-    """按优先级返回可用 TTS Provider：edge-tts（人声更好）→ Windows SAPI。"""
+    """按优先级：Native SAPI（低延迟）→ edge-tts → 旧 SAPI。"""
+    native = WindowsSapiNativeTTSProvider()
+    if native.probe().available:
+        return native
     edge = EdgeTTSProvider()
     if edge.probe().available:
         return edge
@@ -169,6 +239,7 @@ def resolve_tts_provider():
 tts_provider = resolve_tts_provider()
 
 __all__ = [
+    "WindowsSapiNativeTTSProvider",
     "EdgeTTSProvider",
     "WindowsSapiTTSProvider",
     "resolve_tts_provider",

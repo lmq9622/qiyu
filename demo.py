@@ -31,6 +31,15 @@ else:
     _ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT))
 
+# Windows 下强制 Selector 事件循环：实测 Proactor 与本项目复杂运行时
+# （torch/llama/onnx 后台任务等）组合会让 uvicorn 监听 socket 不派发请求，
+# 页面/API 全部超时；切到 Selector 后恢复（覆盖 python -m uvicorn 与打包入口）。
+if sys.platform == "win32":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+
 # 加载 .env（若存在），使 LLM/Letta 等配置可在部署时覆盖
 try:
     from dotenv import load_dotenv
@@ -51,6 +60,8 @@ from rag import get_rag_manager
 from wechat import get_wechat_bot, ITCHAT_AVAILABLE
 from channels import (ClawBotChannel, WechatyChannel,
                       WechatautoChannel, build_placeholder_channels)
+from channels.qqbot_channel import QQBotChannel
+from channels.feishu_channel import FeishuChannel
 from channels import store as channel_store
 
 # M1：行为 / 状态 / LLM 逻辑已拆分到 companion/ 包
@@ -125,6 +136,8 @@ from rag import get_rag_manager
 from wechat import get_wechat_bot, ITCHAT_AVAILABLE
 from channels import (get_channel_registry, ClawBotChannel, WechatyChannel,
                       WechatautoChannel, build_placeholder_channels)
+from channels.qqbot_channel import QQBotChannel
+from channels.feishu_channel import FeishuChannel
 from channels import store as channel_store
 from channels.wechat_emoji import build_emoji_prompt_block
 from letta_backend import get_letta_backend
@@ -224,6 +237,16 @@ app.add_middleware(
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# UI v2：整机重写前端（独立 /app2 前缀，完成后才替换根入口）
+_UI2_DIR = Path(__file__).resolve().parent / "ui2"
+if _UI2_DIR.exists():
+    app.mount("/app2", StaticFiles(directory=str(_UI2_DIR), html=True), name="app2")
+try:
+    from ui2_server import router as _ui2_router
+    app.include_router(_ui2_router)
+except Exception as _e:  # noqa: BLE001
+    logger.warning(f"[UI2] 管理 API 挂载失败: {_e}")
 
 # 全局状态
 runtime_manager = RuntimeManager()
@@ -331,18 +354,29 @@ async def _handle_pending_batch(user_id: str, char_id: str, temperature: float):
         llm_messages.append({"role": role, "content": content})
     batch = [{"text": t, "timestamp": (p.get("timestamp") or time.time())}
              for t, p in zip(texts, pending)]
-    try:
-        reply_text, reply_pieces = await llm_client.chat(
-            char_id, llm_messages, temperature,
-            user_id=user_id, use_memory=True, use_rag=True,
-            pending_messages=batch if len(batch) >= 2 else None)
-    except Exception as e:
-        logger.error(f"[合批] 批量回复生成失败: {e}")
-        return
+    if os.getenv("QIYU_BRAIN_PIPELINE", "1") != "0":
+        # P1：pending 批量也必须先进 MiniMind → BrainDecision，再决定 Direct/MainBrain
+        try:
+            _pres = await _pipeline_web_chat_payload(
+                user_id, char_id, temperature, llm_messages, texts,
+                [], skip_user_write=True)
+            reply_text = str(_pres["payload"]["choices"][0]["message"]["content"] or "")
+            reply_pieces = _pres["payload"].get("pieces") or []
+        except Exception as e:
+            logger.error(f"[合批] BrainPipeline 批量处理失败: {e}")
+            return
+    else:
+        try:
+            reply_text, reply_pieces = await llm_client.chat(
+                char_id, llm_messages, temperature,
+                user_id=user_id, use_memory=True, use_rag=True,
+                pending_messages=batch if len(batch) >= 2 else None)
+        except Exception as e:
+            logger.error(f"[合批] 批量回复生成失败: {e}")
+            return
     if not reply_text:
         return
     try:
-        # chat() 内部 _finalize_chat_reply 已更新会话状态/关系/情绪；这里只做记忆落账 + 事件下发
         msgs = []
         for _p in (reply_pieces or []):
             _m = {"text": _p.get("text", ""), "type": _p.get("type", "statement"), "delay": _p.get("delay", 0)}
@@ -350,19 +384,265 @@ async def _handle_pending_batch(user_id: str, char_id: str, temperature: float):
                 _m["image_url"] = _p.get("image_url")
             msgs.append(_m)
         if msgs:
-            await _send_active_messages(user_id, msgs, "ordinary_chat", reason="batch", char_id=char_id)
+            if os.getenv("QIYU_BRAIN_PIPELINE", "1") != "0":
+                # Pipeline 已负责记忆落账/状态副作用，这里只发前端事件，避免重复入库
+                _push_event(user_id, {
+                    "type": "assistant_messages",
+                    "conversation_state": "ordinary_chat",
+                    "messages": msgs,
+                    "active": True,
+                    "reason": "batch",
+                    "char_id": char_id,
+                })
+            else:
+                await _send_active_messages(user_id, msgs, "ordinary_chat", reason="batch", char_id=char_id)
         try:
-            from runtime.db import unified_store
-            unified_store.record_message(user_id, char_id, "assistant", reply_text, pieces=reply_pieces)
+            if os.getenv("QIYU_BRAIN_PIPELINE", "1") != "0":
+                pass  # Pipeline 已入库
+            else:
+                from runtime.db import unified_store
+                unified_store.record_message(user_id, char_id, "assistant", reply_text, pieces=reply_pieces)
         except Exception:
             pass
-        if main_loop and not main_loop.is_closed():
-            asyncio.run_coroutine_threadsafe(_run_memory_pipeline(user_id, char_id), main_loop)
-        else:
-            asyncio.create_task(_run_memory_pipeline(user_id, char_id))
+        if os.getenv("QIYU_BRAIN_PIPELINE", "1") == "0":
+            if main_loop and not main_loop.is_closed():
+                asyncio.run_coroutine_threadsafe(_run_memory_pipeline(user_id, char_id), main_loop)
+            else:
+                asyncio.create_task(_run_memory_pipeline(user_id, char_id))
     except Exception as e:
         logger.error(f"[合批] 批量回复后处理失败: {e}")
     return batch if len(batch) >= 2 else None
+
+
+# ============ MiniMind-O Realtime Brain 直答（接入真实聊天主链路） ============
+# 只做“简单闲聊/状态报备”的本地直答：规则分流 → 本地 0.1B 出短句 → 质量门槛；
+# 失败/超时/不合格一律返回 None → 调用方照常走 MainBrain，绝不阻塞、绝不假装回复。
+
+def _realtime_char_hint(char_id: str) -> str:
+    """给 MiniMind 直答用的极简角色提示（名字 + 一句话），尽量不跳戏。"""
+    try:
+        ch = char_mgr.get_character(char_id)
+        if ch is None:
+            ch = char_mgr.get_default()
+        if ch is None:
+            return ""
+        _tag = (ch.tagline or "").strip() or (ch.description or "").strip()
+        return (f"{ch.name}，{_tag}" if _tag else ch.name)[:80]
+    except Exception:
+        return ""
+
+
+def _realtime_role_context(user_id: str, char_id: str, user_text: str = "") -> str:
+    """v0.0.26：把当前角色关系 / 耐心 / 最近聊天塞进 MiniMind 直答上下文。
+
+    简单消息也必须像这个角色、这段关系下会说的话，而不是固定“友好助手腔”。
+    限制长度（0.1B 上下文小），只带最近一轮的状态和最近 2~3 句。
+    """
+    try:
+        rel = _init_relation(user_id, char_id)
+        aff = _clamp_int(rel.get("affinity"), 50)
+        tier = rel.get("tier") or "普通朋友"
+        pat = _desire_value(user_id, char_id)
+        cs = _conv_state(user_id, char_id)
+        scene = str(cs.get("scene") or "ordinary_chat")
+        es = _emotion_state(user_id, char_id)
+        comp = _emotion_composite(es) if es else 0.0
+        emo_tone = _emotion_tone(comp)
+        mood = _emotion_active_mood_event(es)
+        state = f"【状态】你和对方现在是{tier}（好感{aff}/100，耐心{pat}/100，场景={scene}，当前情绪={emo_tone}）。"
+        if mood:
+            state += f"你今天因为「{(mood.get('reason') or '').strip()[:50] or '说不上来'}」心情被压着，不想硬撑热情。"
+    except Exception:
+        state = ""
+    try:
+        sig = _topic_signal(user_id, char_id, user_text or "")
+        if sig.status == "repeat_recent":
+            state += "【对方刚把同一件事又问了一遍】你可以先像真人一样疑惑/吐槽一句（？/你咋又问/刚不是说过了吗），再自然接住；不要长篇回忆。"
+        elif sig.status == "abrupt":
+            state += "【对方突然跳到完全不相关的话题】可以有一点意外，也可以直接接住，别每句都点破。"
+    except Exception:
+        pass
+    try:
+        hist = mem_mgr.get_recent_history(user_id, limit=8, char_id=char_id) or []
+        recent = []
+        for m in hist[-5:]:
+            role = "对方" if m.get("role") == "user" else "你"
+            txt = str(m.get("content") or m.get("text") or "").strip()
+            if txt and txt != "(无回复)" and len(txt) <= 80:
+                recent.append(f"{role}：{txt}")
+        hist_block = ("【最近聊天】\n" + "\n".join(recent)) if recent else ""
+    except Exception:
+        hist_block = ""
+    ctx = " ".join(x for x in (state, hist_block) if x)
+    return ctx[:360]
+
+
+async def _realtime_memory_block(user_id: str, char_id: str, query: str) -> str:
+    """MiniMind + RAG（压缩注入）：只取 1~2 条高相关记忆，绝不塞完整 RAG。
+
+    走 runtime.MemoryProvider.retrieve（结构化召回），丢弃和最近聊天重复的条目；
+    没有相关记忆返回空串，MiniMind 不硬吃无关历史。
+    """
+    try:
+        from runtime.providers import ProviderKind
+        mem_provider = runtime_manager.registry.get(ProviderKind.MEMORY)
+        if mem_provider is None:
+            return ""
+        hits = await mem_provider.retrieve(user_id, query, char_id=char_id, top_k=4)
+        if not hits:
+            return ""
+        try:
+            recent_hist = mem_mgr.get_recent_history(user_id, limit=6, char_id=char_id) or []
+            recent_txt = {str(m.get("content") or m.get("text") or "").strip()[:40]
+                          for m in recent_hist if m.get("content") or m.get("text")}
+        except Exception:
+            recent_txt = set()
+        picked = []
+        for hit in hits:
+            txt = str(hit.get("text") or "").strip()
+            if not txt or txt in recent_txt:
+                continue
+            if len(txt) > 90:
+                txt = txt[:90] + "…"
+            picked.append(txt)
+            if len(picked) >= 2:
+                break
+        if not picked:
+            return ""
+        return "【相关记忆（少量，别主动炫耀记忆，只在相关时自然用到）】\n" + "\n".join(f"- {t}" for t in picked)
+    except Exception as e:
+        logger.debug(f"[Realtime] MiniMind 记忆召回失败（不阻塞）: {e}")
+        return ""
+
+
+def _realtime_parsed_from(text: str, user_content: str = "") -> dict:
+    """把 MiniMind 直答文本包装成与主脑一致的解析结构（供副作用/记忆/事件复用）。"""
+    return {
+        "messages": [{"text": (text or "").strip(), "type": "statement", "delay": 0}],
+        "conversation_state": "闲聊",
+        "topic": (user_content or "")[:80],
+        "topic_confidence": 0.0,
+        "topic_shift": False,
+        "user_intent": "闲聊",
+        "user_emotion": "",
+        "interaction_need": 2,
+        "relation_delta": None,
+        "relationship": "",
+        "memory": {"long": [], "short": []},
+        "actions": [],
+        "schedules": [],
+        "webcheck": "",
+    }
+
+
+async def _try_realtime_direct(user_id: str, char_id: str, text: str,
+                               images: list | None = None,
+                               extra_batch: list | None = None) -> dict | None:
+    """尝试让 MiniMind-O Realtime Brain 直接回复本条简单消息。
+
+    v0.0.26：业务层只调统一 provider.analyze()（RealtimeBrainProvider 接口），
+    由 Auto 层做规则置信度 + 已选后端角色化直答；业务不再知道 official/gguf/vulkan。
+    - 无图片 + 每条消息都是 simple 类别才尝试，避免 MiniMind 直答复杂问题；
+    - 官方/GGUF 都只在 Auto 已选中且模型已加载后参与（首载绝不阻塞聊天）；
+    - analyze 返回 needs_main_brain=true / 无合格短句 → 升级 MainBrain。
+    """
+    text = (text or "").strip()
+    if not text or images:
+        return None
+    try:
+        from runtime.brain.router import brain_router
+        from runtime.classifier import classify_user_message
+        msgs_to_try = [text]
+        for _x in (extra_batch or []):
+            _xt = str(_x or "").strip()
+            if _xt:
+                msgs_to_try.append(_xt)
+        for _m in msgs_to_try:
+            if classify_user_message(_m).action not in ("direct_reply", "emotion"):
+                return None
+        hint = _realtime_char_hint(char_id)
+        role_ctx = _realtime_role_context(user_id, char_id, text)
+        mem_block = await _realtime_memory_block(user_id, char_id, "；".join(msgs_to_try)[:160])
+        if mem_block:
+            role_ctx = (role_ctx + "\n" + mem_block)[:560]
+        route = await brain_router.route_message(
+            "；".join(msgs_to_try),
+            {
+                "char_hint": hint,
+                "role_context": role_ctx,
+                "images": bool(images),
+                "max_tokens": 8,
+                "timeout_s": 6.0,
+                "user_id": user_id,
+                "char_id": char_id,
+            })
+        if route is None or route.router_decision != "realtime":
+            return None
+        rr_text = str(route.quick_reply or "").strip()
+        parsed = _realtime_parsed_from(rr_text, text)
+        _postprocess_reply_messages(user_id, char_id, parsed, text)
+        if not parsed.get("messages"):
+            return None
+        _reply = "".join(m.get("text", "") for m in parsed["messages"])
+        if not _reply.strip():
+            return None
+        logger.info(f"[Realtime] MiniMind-O 直答 user={user_id} msg={text[:36]!r} -> "
+                    f"{_reply[:48]!r} backend={route.backend} "
+                    f"model={route.model} confidence={route.confidence} "
+                    f"reason={route.reason}")
+        return {"parsed": parsed, "meta": route.__dict__}
+    except Exception as e:
+        logger.warning(f"[Realtime] 直答尝试失败，回退 MainBrain: {e}")
+        return None
+
+
+def _record_realtime_reply(user_id: str, char_id: str, parsed: dict,
+                           relation: dict | None = None) -> str:
+    """Realtime 直答后落账：历史 + 统一存储 + 对话日志 + 异步记忆整理；返回纯文本。
+    （会话状态/关系/情绪等副作用已由 _apply_chat_side_effects 处理）"""
+    msgs = parsed.get("messages") or []
+    reply_text = "".join(m.get("text", "") for m in msgs)
+    pieces = []
+    for _m in msgs:
+        _p = {"text": _m.get("text", ""), "type": _m.get("type", "statement"), "delay": _m.get("delay", 0)}
+        if _m.get("image_url"):
+            _p["image_url"] = _m.get("image_url")
+        pieces.append(_p)
+    if not reply_text:
+        mem_mgr.add_message(user_id, "assistant", "(无回复)", char_id)
+        return ""
+    mem_mgr.add_message(user_id, "assistant", reply_text, char_id, pieces=pieces)
+    try:
+        from runtime.db import unified_store
+        unified_store.record_message(user_id, char_id, "assistant", reply_text, pieces=pieces)
+        unified_store.record_emotion(user_id, char_id, _emotion_state(user_id, char_id) or {})
+        unified_store.record_relationship(
+            user_id, char_id,
+            int((relation or {}).get("affinity") or 0),
+            int((relation or {}).get("friendship") or 0),
+            str((relation or {}).get("tier") or ""),
+            str((relation or {}).get("relationship") or ""))
+    except Exception:
+        pass
+    try:
+        from runtime.logging_setup import logger_conv
+        logger_conv.info(f"[{user_id}] {char_id} 助手: {reply_text[:200]}")
+    except Exception:
+        pass
+    asyncio.create_task(_run_memory_pipeline(user_id, char_id))
+    return reply_text
+
+
+def _realtime_emotion_payload(user_id: str, char_id: str) -> dict:
+    """与主脑路径一致的最终事件 emotion 负载（只读状态，不改写）。"""
+    _emo = _emotion_state(user_id, char_id)
+    return {
+        "emotions": {k: int(_emo.get(k, EMOTION_BASE.get(k, 10))) for k in EMOTION_KEYS} if _emo else {},
+        "composite": round(_emotion_composite(_emo), 1) if _emo else 0,
+        "tone": _emotion_tone(_emotion_composite(_emo)) if _emo else "一般",
+        "reason": (_emo or {}).get("reason", ""),
+        "mood_event": _emotion_active_mood_event(_emo) if _emo else None,
+    }
 
 
 @app.on_event("startup")
@@ -523,7 +803,15 @@ async def startup():
         #    这里同时给 App 前端推 typing 事件，让两端的输入指示器一起亮）
         _push_event(user_id, {"type": "typing", "user_id": user_id, "char_id": char_id})
         try:
-            reply, pieces = await llm_client.chat(char_id, messages, user_id=user_id, channel=channel)
+            if os.getenv("QIYU_BRAIN_PIPELINE", "1") != "0":
+                # P1：微信入口同样先进 MiniMind → BrainDecision → Direct/MainBrain
+                _pres = await _pipeline_web_chat_payload(
+                    user_id, char_id, float(st.get("temperature") or 0.7),
+                    messages, [mem_content], images, skip_user_write=True)
+                reply = str(_pres["payload"]["choices"][0]["message"]["content"] or "")
+                pieces = _pres["payload"].get("pieces") or []
+            else:
+                reply, pieces = await llm_client.chat(char_id, messages, user_id=user_id, channel=channel)
         except Exception:
             chat_gate.clear_busy(user_id)
             raise
@@ -531,10 +819,14 @@ async def startup():
             _push_event(user_id, {"type": "typing_stop", "user_id": user_id, "char_id": char_id})
 
         # 5) 保存助手回复到记忆
-        mem_mgr.add_message(user_id, "assistant", reply, char_id, pieces=pieces)
-        # 触发记忆流水线（切回主事件循环，避免微信线程的临时 loop 关闭）
-        if main_loop and not main_loop.is_closed():
-            asyncio.run_coroutine_threadsafe(_run_memory_pipeline(user_id, char_id), main_loop)
+        if os.getenv("QIYU_BRAIN_PIPELINE", "1") != "0":
+            # Pipeline 已负责记忆/状态副作用，这里只继续前端/通道同步
+            pass
+        else:
+            mem_mgr.add_message(user_id, "assistant", reply, char_id, pieces=pieces)
+            # 触发记忆流水线（切回主事件循环，避免微信线程的临时 loop 关闭）
+            if main_loop and not main_loop.is_closed():
+                asyncio.run_coroutine_threadsafe(_run_memory_pipeline(user_id, char_id), main_loop)
         # 6) 前端同步：微信收到的消息与回复实时推给 App 前端（会话选择器正在看该会话时自动刷新；
         #    同时广播一份给 web_user，让前端无论在看哪个会话都能刷新会话列表并提示）
         ev = {
@@ -585,8 +877,13 @@ async def startup():
     channel_registry.register(WechatautoChannel())
     wechaty_ch = WechatyChannel(callback_url=f"http://127.0.0.1:{DEMO_PORT}/v1/channels/wechaty/webhook")
     channel_registry.register(wechaty_ch)
+    # 预留通道：企业微信保留占位；QQ/飞书已由真实协议通道替换
     for _ph in build_placeholder_channels():
+        if _ph.id in ("qqbot", "feishu"):
+            continue
         channel_registry.register(_ph)
+    channel_registry.register(QQBotChannel("qqbot"))
+    channel_registry.register(FeishuChannel("feishu"))
     channel_registry.set_message_handler(handle_wechat_msg)
 
     global main_loop, _background_task
@@ -617,7 +914,11 @@ async def shutdown():
 async def root():
     index_path = STATIC_DIR / "index.html"
     if index_path.exists():
-        return FileResponse(str(index_path))
+        resp = FileResponse(str(index_path))
+        # M12：禁止缓存 index.html，避免“修复了 UI 但用户浏览器还在用旧页面”
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
     return {"message": "栖语", "status": "running"}
 
 
@@ -799,6 +1100,220 @@ async def upload_avatar(file: UploadFile = File(...)):
 
 # ============ 聊天 API ============
 
+async def _pipeline_ready_realtime():
+    """P0：确保 Auto Realtime 已完成真实实测/选中；失败不阻塞（Pipeline 会走 fallback）。"""
+    try:
+        rt = runtime_manager.realtime
+        if rt is None:
+            return None
+        if getattr(rt, "_active", None) is not None:
+            return rt
+        import asyncio as _aio
+        if not _aio.get_event_loop().is_running():
+            return rt
+        # 启动期 Auto bench 没跑完时，这里显式补一次真实 benchmark（只对真实候选实测）
+        try:
+            await _aio.wait_for(rt.benchmark(), timeout=180)
+        except Exception:
+            pass
+        return rt
+    except Exception:
+        return None
+
+
+async def _pipeline_web_chat_payload(user_id: str, char_id: str, temperature: float,
+                                     llm_messages: list, user_texts: list[str],
+                                     images: list, skip_user_write: bool = False,
+                                     on_event=None, extra_context: Optional[dict] = None) -> dict:
+    """P0 Web 主链路：MessageGateway → MiniMind → BrainDecision → Direct/MainBrain。
+    仅非流式 / QIYU_BRAIN_PIPELINE=1 时启用；不替代旧链路（默认关闭，防误伤 UI）。"""
+    from runtime.gateway import message_gateway
+    user_content = (user_texts or [""])[-1]
+    try:
+        _pre_reply_emotion_update(user_id, char_id, user_content or "")
+    except Exception:
+        pass
+    if not skip_user_write:
+        for t in user_texts:
+            mem_mgr.add_message(user_id, "user", t, char_id)
+
+    hint = _realtime_char_hint(char_id)
+    role_ctx = _realtime_role_context(user_id, char_id, user_content or "")
+    try:
+        sig = _topic_signal(user_id, char_id, user_content or "")
+        topic = getattr(sig, "topic", "") or ""
+        transition = getattr(sig, "status", "continue") or "continue"
+    except Exception:
+        topic, transition = "", "continue"
+    mem_block = ""
+    try:
+        mem_block = await _realtime_memory_block(user_id, char_id, "；".join(user_texts)[:160])
+    except Exception:
+        mem_block = ""
+    memory_hint = ""
+    if mem_block:
+        memory_hint = mem_block.replace("【相关记忆（少量，别主动炫耀记忆，只在相关时自然用到）】", "").strip()
+        role_ctx = (role_ctx + "\n" + mem_block)[:560]
+
+    context = {
+        "user_id": user_id,
+        "char_id": char_id,
+        "char_hint": hint,
+        "role_context": role_ctx,
+        "images": images or [],
+        "web_enabled": bool(load_runtime_settings().get("web_enabled", True)),
+        "max_tokens": 16,
+        "timeout_s": 8.0,
+        "topic": topic,
+        "topic_transition": transition,
+        "emotion_state": _emotion_state(user_id, char_id) or {},
+        "memory_hint": memory_hint,
+        "_llm_messages": llm_messages,
+    }
+    if extra_context:
+        context.update(dict(extra_context))
+
+    await _pipeline_ready_realtime()
+
+    async def _main_brain(texts, decision, ctx, brain_ctx):
+        msgs = ctx.get("_llm_messages") or [{"role": "user", "content": t} for t in texts]
+        reply, pieces = await llm_client.chat(
+            char_id, msgs, temperature, user_id=user_id,
+            use_memory=True, use_rag=True, brain_context=brain_ctx)
+        return {"text": reply or "", "pieces": pieces or []}
+
+    message_gateway.pipeline.set_main_brain(_main_brain)
+    result = await message_gateway.handle_web_chat(user_id, char_id, user_texts, context,
+                                                   on_event=on_event)
+    pieces = result.get("pieces") or []
+    reply_text = result.get("reply_text") or ""
+    decision_internal = result.get("decision") or {}
+
+    if reply_text:
+        parsed = {
+            "messages": pieces,
+            "conversation_state": "闲聊",
+            "topic": topic,
+            "user_intent": decision_internal.get("intent_summary", ""),
+        }
+        try:
+            relation = _apply_chat_side_effects(user_id, char_id, parsed, user_content or "")
+        except Exception:
+            relation = None
+        try:
+            mem_mgr.add_message(user_id, "assistant", reply_text, char_id, pieces=pieces)
+        except Exception:
+            pass
+        try:
+            from runtime.db import unified_store
+            unified_store.record_message(user_id, char_id, "assistant", reply_text,
+                                         pieces=pieces)
+            unified_store.record_emotion(user_id, char_id, _emotion_state(user_id, char_id) or {})
+        except Exception:
+            pass
+        try:
+            from runtime.logging_setup import logger_conv
+            logger_conv.info(f"[{user_id}] {char_id} 助手(Pipeline): {reply_text[:200]}")
+        except Exception:
+            pass
+        try:
+            asyncio.create_task(_run_memory_pipeline(user_id, char_id))
+        except Exception:
+            pass
+    else:
+        relation = None
+        mem_mgr.add_message(user_id, "assistant", "(无回复)", char_id)
+
+    return {
+        "payload": {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "model": char_id,
+            "runtime": "brain_pipeline",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text},
+                         "finish_reason": "stop"}],
+            "pieces": pieces,
+        },
+        "chain": result.get("chain") or [],
+        "decision": decision_internal,
+        "took_ms": result.get("took_ms"),
+        "relation": relation,
+    }
+
+
+async def _pipeline_web_chat_stream(user_id: str, char_id: str, temperature: float,
+                                    response_id: str, llm_messages: list,
+                                    user_texts: list[str], images: list):
+    """P1：Web 流式主链路（MessageGateway → MiniMind → Decision）。
+
+    双段输出：immediate_then_final 时先把 MiniMind 即时反应作为 partial 增量推给前端
+    （真人感：先应一声），MainBrain 跑完再推最终消息；前端按 _playedPartial 去重。
+    """
+    lock = chat_gate.lock_for(user_id)
+    if lock.locked():
+        for _mc in user_texts:
+            pending_queue.enqueue(user_id, {"text": _mc, "images": images,
+                                            "timestamp": time.time()})
+        yield f"data: {json.dumps({'type': 'queued', 'id': response_id, 'message': '消息已排队，稍后统一回复'})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+    async with lock:
+        chat_gate.mark_busy(user_id)
+        events: asyncio.Queue = asyncio.Queue()
+
+        async def _on_event(name: str, payload: dict):
+            await events.put((name, payload))
+
+        def _immediate_sse(payload: dict) -> str:
+            msg = {"type": "assistant_messages", "id": response_id, "partial": True,
+                   "runtime": "brain_pipeline", "conversation_state": "闲聊",
+                   "messages": [{"text": payload.get("text", ""), "type": "immediate", "delay": 0}],
+                   "pushed": 1}
+            return "data: " + json.dumps(msg, ensure_ascii=False) + "\n\n"
+
+        try:
+            _cancel_nudge(user_id, char_id)
+            _update_conv_state(user_id, char_id, "user_message", None, "；".join(user_texts))
+            task = asyncio.create_task(_pipeline_web_chat_payload(
+                user_id, char_id, temperature, llm_messages, user_texts, images,
+                on_event=_on_event))
+            emitted_immediate = False
+            while not task.done():
+                try:
+                    name, payload = await asyncio.wait_for(events.get(), timeout=0.25)
+                except asyncio.TimeoutError:
+                    continue
+                if name == "immediate_reaction" and not emitted_immediate:
+                    emitted_immediate = True
+                    yield _immediate_sse(payload)
+            try:
+                r = await task
+            except Exception as e:
+                logger.error(f"[BrainPipeline] 流式处理失败: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': f'生成失败: {e}'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            # 竞态兜底：即时段在任务收尾后到达也要补推
+            while not events.empty():
+                name, payload = events.get_nowait()
+                if name == "immediate_reaction" and not emitted_immediate:
+                    emitted_immediate = True
+                    yield _immediate_sse(payload)
+            pieces = (r.get("payload") or {}).get("pieces") or []
+            relation = r.get("relation")
+            if pieces:
+                yield f"data: {json.dumps({'type': 'assistant_messages', 'id': response_id, 'partial': False, 'runtime': 'brain_pipeline', 'conversation_state': '闲聊', 'relation': relation, 'emotion': _realtime_emotion_payload(user_id, char_id), 'messages': pieces, 'pushed': len(pieces)}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            while pending_queue.pending(user_id):
+                try:
+                    await _handle_pending_batch(user_id, char_id, temperature)
+                except Exception as e:
+                    logger.error(f"[合批] 流式 Pipeline 合批失败: {e}")
+                    break
+        finally:
+            chat_gate.clear_busy(user_id)
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: ChatRequest):
     user_id = request.user
@@ -835,6 +1350,27 @@ async def chat_completions(request: ChatRequest):
         llm_messages = messages[:-1] + [{"role": "user", "content": parts}]
         mem_contents[-1] = ("[图片] " + user_content).strip()
     response_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+    if os.getenv("QIYU_BRAIN_PIPELINE", "1") == "1" and request.stream:
+        return StreamingResponse(
+            _pipeline_web_chat_stream(
+                user_id, char_id, temperature, response_id,
+                llm_messages, mem_contents, images),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    if not request.stream and os.getenv("QIYU_BRAIN_PIPELINE", "1") == "1":
+        try:
+            r = await _pipeline_web_chat_payload(
+                user_id, char_id, temperature, llm_messages, mem_contents, images)
+            logger.info(f"[BrainPipeline] web chat OK mode={r['decision'].get('mode')} "
+                        f"mini_ran={r['decision'].get('mini_ran')} "
+                        f"chain={[c.get('step') for c in r['chain']]}")
+            return JSONResponse(content=r["payload"])
+        except Exception as e:
+            logger.error(f"[BrainPipeline] web chat 失败，回退旧非流式链路: {e}")
+            # 不回假回复；落到旧链路继续（旧链路本身仍是 MainBrain 兜底，不会断聊）
 
     if request.stream:
         async def generate():
@@ -893,6 +1429,30 @@ async def chat_completions(request: ChatRequest):
                             _rfh = _find_recent_fact(user_id, char_id, _probe)
                     except Exception:
                         _rfh = None
+                # Emotion 前置更新：用户消息先改变角色情绪，再进 BrainRouter
+                try:
+                    _pre_reply_emotion_update(user_id, char_id, user_content or "")
+                except Exception as _em_e:
+                    logger.debug(f"[Emotion] 前置更新失败（不阻塞）: {_em_e}")
+                # MiniMind-O Realtime Brain：简单闲聊本地直答；成功即整段收尾，不走 MainBrain
+                _rt_batch = _build_trailing_user_batch(llm_messages)
+                _rt_hit = await _try_realtime_direct(
+                    user_id, char_id, user_content, images,
+                    extra_batch=[m.get("text") for m in _rt_batch] if _rt_batch else None)
+                if _rt_hit:
+                    _rt_parsed = _rt_hit["parsed"]
+                    try:
+                        _rt_relation = _apply_chat_side_effects(user_id, char_id, _rt_parsed, user_content)
+                    except Exception as _rt_e:
+                        logger.warning(f"[Realtime] 直答副作用失败，降级为无副作用回复: {_rt_e}")
+                        _rt_relation = None
+                    _rt_msgs = _rt_parsed["messages"]
+                    yield f"data: {json.dumps({'type': 'assistant_messages', 'id': response_id, 'partial': True, 'runtime': 'minimindo', 'messages': _rt_msgs}, ensure_ascii=False)}\n\n"
+                    _record_realtime_reply(user_id, char_id, _rt_parsed, _rt_relation)
+                    yield f"data: {json.dumps({'type': 'assistant_messages', 'id': response_id, 'partial': False, 'runtime': 'minimindo', 'conversation_state': _rt_parsed.get('conversation_state', '闲聊'), 'relation': _rt_relation, 'emotion': _realtime_emotion_payload(user_id, char_id), 'messages': _rt_msgs, 'pushed': len(_rt_msgs)}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    await _flush_batch()
+                    return
                 try:
                     _pending = _build_trailing_user_batch(llm_messages)
                     async for reasoning, content in llm_client.chat_stream(
@@ -1071,6 +1631,11 @@ async def chat_completions(request: ChatRequest):
                 user_states[user_id].pop("unanswered_pending", None)
             _cancel_nudge(user_id, char_id)
             _update_conv_state(user_id, char_id, "user_message")
+            # Emotion 前置更新：先更新状态，再让 Router/MainBrain 用新状态表达
+            try:
+                _pre_reply_emotion_update(user_id, char_id, user_content or "")
+            except Exception as _em_e2:
+                logger.debug(f"[Emotion] 前置更新失败（不阻塞）: {_em_e2}")
             for _mc in mem_contents:
                 mem_mgr.add_message(user_id, "user", _mc, char_id)
             try:
@@ -1082,6 +1647,33 @@ async def chat_completions(request: ChatRequest):
             except Exception:
                 pass
             _pending = _build_trailing_user_batch(llm_messages)
+            # MiniMind-O Realtime Brain：简单闲聊本地直答；成功直接返回，不走 MainBrain
+            _rt_hit = await _try_realtime_direct(
+                user_id, char_id, user_content, images,
+                extra_batch=[m.get("text") for m in (_pending or [])] if _pending else None)
+            if _rt_hit:
+                _rt_parsed = _rt_hit["parsed"]
+                try:
+                    _rt_relation = _apply_chat_side_effects(user_id, char_id, _rt_parsed, user_content)
+                except Exception as _rt_e:
+                    logger.warning(f"[Realtime] 直答副作用失败，降级为无副作用回复: {_rt_e}")
+                    _rt_relation = None
+                _rt_reply = _record_realtime_reply(user_id, char_id, _rt_parsed, _rt_relation)
+                chat_gate.clear_busy(user_id)
+                while pending_queue.pending(user_id):
+                    try:
+                        await _handle_pending_batch(user_id, char_id, temperature)
+                    except Exception as e:
+                        logger.error(f"[合批] 非流式路径合批失败: {e}")
+                        break
+                return JSONResponse(content={
+                    "id": response_id,
+                    "object": "chat.completion",
+                    "created": int(datetime.now().timestamp()),
+                    "model": char_id,
+                    "runtime": "minimindo",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": _rt_reply or ""}, "finish_reason": "stop"}],
+                }, headers={"X-Character": char_id, "X-Temperature": str(temperature), "X-Runtime": "minimindo"})
             try:
                 reply, pieces = await llm_client.chat(
                     char_id, llm_messages, temperature,
@@ -1341,6 +1933,31 @@ async def save_routes(data: SaveRoutesRequest):
 
 # ============ 设置 API ============
 
+def _minimind_settings() -> dict:
+    """MiniMind（小脑）真实状态与偏好：官方 D5+D6 优先。"""
+    runtime = load_runtime_settings()
+    out = {
+        "prefer_official": bool(runtime.get("realtime_prefer_official", True)),
+        "base_model": "minimind-tag-D6（D5+final D6 正确合并，运行时无需 peft）",
+        "adapter": "未加载",
+        "adapter_loaded": False,
+        "backend": "unloaded",
+        "model": "",
+    }
+    try:
+        rt = runtime_manager.realtime
+        h = rt.health() if rt else {}
+        out["backend"] = str(h.get("backend") or "")
+        out["model"] = str(h.get("model") or "")
+        out["adapter"] = str(h.get("adapter") or "")
+        out["adapter_loaded"] = bool(h.get("adapter_loaded") or False)
+        out["base_model"] = "minimind-tag-D6（正确合并）" if not out["adapter"] else (
+            "显式 adapter 覆盖（开发/训练态）")
+    except Exception as e:
+        out["backend"] = f"error:{e}"
+    return out
+
+
 @app.get("/v1/settings")
 async def get_settings():
     runtime = load_runtime_settings()
@@ -1354,13 +1971,16 @@ async def get_settings():
     
     return {
         "llm": {
+            "provider": runtime.get("llm_provider", ""),
             "base_url": runtime.get("llm_url", LLM_URL),
             "model": runtime.get("llm_model", LLM_MODEL),
             "route_url": runtime.get("llm_route_url") or LLM_ROUTE_URL or runtime.get("llm_url", LLM_URL),
             "route_model": runtime.get("llm_route_model") or LLM_ROUTE_MODEL or runtime.get("llm_model", LLM_MODEL),
             "api_key": runtime.get("api_key", ""),
+            "extra": runtime.get("llm_extra") or {},
             "default_temperature": runtime.get("default_temperature", 0.7),
         },
+        "minimind": _minimind_settings(),
         "routes": cfg.routes.get("rules", []),
         "memory_tags": runtime.get("memory_tags", []),
         "allow_profanity": runtime.get("allow_profanity", False),
@@ -1393,6 +2013,12 @@ async def save_settings(data: SaveSettingsRequest):
     try:
         settings = load_runtime_settings()
         
+        if data.llm_provider is not None:
+            settings["llm_provider"] = str(data.llm_provider)
+        if data.llm_extra is not None:
+            settings["llm_extra"] = dict(data.llm_extra)
+        if data.realtime_prefer_official is not None:
+            settings["realtime_prefer_official"] = bool(data.realtime_prefer_official)
         if data.llm_url:
             settings["llm_url"] = data.llm_url
             global LLM_URL
@@ -1462,18 +2088,25 @@ async def save_settings(data: SaveSettingsRequest):
 # ============ LLM 代理 API ============
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models(url: str = "", api_key: str = ""):
     """获取可用模型列表"""
+    runtime = load_runtime_settings()
+    url = (url.strip() or runtime.get("llm_url") or LLM_URL).rstrip("/")
+    api_key = (api_key.strip() if api_key is not None else "") or runtime.get("api_key") or ""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{LLM_URL}/models")
+            resp = await client.get(f"{url}/models", headers=headers)
             resp.raise_for_status()
             data = resp.json()
             models = data.get("data", [])
             return {"data": [{"id": m.get("id", ""), "name": m.get("id", "")} for m in models]}
     except Exception as e:
         logger.warning(f"获取模型列表失败: {e}")
-        return {"data": [{"id": LLM_MODEL, "name": LLM_MODEL}]}
+        return {"data": [{"id": runtime.get("llm_model") or LLM_MODEL,
+                          "name": runtime.get("llm_model") or LLM_MODEL}]}
 
 
 @app.get("/v1/llm/presets")
@@ -1826,6 +2459,22 @@ async def wechaty_webhook(request: Request):
         return {"ok": False, "message": str(e)}
 
 
+# ============ 飞书事件订阅回调（统一消息链路） ============
+@app.post("/v2/channels/feishu/webhook")
+async def feishu_webhook(request: Request):
+    """飞书开放平台事件订阅 URL：challenge 校验与 im.message.receive_v1 入站。"""
+    try:
+        payload = await request.json()
+        ch = channel_registry.get("feishu")
+        if not ch:
+            return JSONResponse(status_code=404, content={"code": 0, "message": "feishu not registered"})
+        result = await ch.handle_webhook(payload)
+        return JSONResponse(content=result)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[Feishu] webhook 处理异常: {e}")
+        return JSONResponse(status_code=200, content={"code": 0})
+
+
 # ============ 微信 API（向后兼容，映射到 Wechaty 单账号通道） ============
 
 @app.post("/v1/wechat/start")
@@ -1985,12 +2634,12 @@ async def runtime_models_api():
 
 @app.post("/v1/runtime/models/load")
 async def runtime_models_load(data: dict):
-    return runtime_manager.load_model(str(data.get("path") or ""))
+    return await runtime_manager.load_model(str(data.get("path") or ""))
 
 
 @app.post("/v1/runtime/models/unload")
 async def runtime_models_unload():
-    return runtime_manager.unload_model()
+    return await runtime_manager.unload_model()
 
 
 @app.post("/v1/runtime/realtime/judge")
@@ -2030,6 +2679,112 @@ async def tts_api(data: dict):
 async def tts_status_api():
     from runtime.tts import tts_provider
     return {"provider": tts_provider.id, "status": tts_provider.status().to_dict()}
+
+
+# ============ 语音流式 + 打断（P2 真实链路） ============
+@app.get("/v1/voice/stream")
+async def voice_stream_api(text: str = "", emotion: str = "neutral",
+                           intensity: float = 0.5, user_id: str = "web_user"):
+    """分句 TTS 流：SSE 逐条返回 {text, path, format, emotion, speed, pitch}。"""
+    text = (text or "").strip()
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "text_empty"})
+    from runtime.tts import resolve_tts_provider
+    from runtime.voice_pipeline import VoicePipeline, VoiceProfile, voice_pipeline
+
+    provider = resolve_tts_provider()
+    vp = VoicePipeline(profile=VoiceProfile(
+        voice_id="", speed=1.0, pitch=1.0, energy=1.0))
+
+    async def gen():
+        import base64
+        async for chunk in vp.synthesize_stream(
+                text, emotion_state={"mood": emotion, "intensity": intensity},
+                provider=provider):
+            data_url = ""
+            if chunk.path:
+                try:
+                    data_url = "data:audio/wav;base64," + base64.b64encode(
+                        Path(chunk.path).read_bytes()).decode("ascii")
+                except Exception:
+                    data_url = ""
+            yield f"data: {json.dumps({'type': 'audio_chunk', 'index': chunk.index, 'text': chunk.text, 'path': chunk.path, 'format': chunk.format, 'duration_ms': chunk.duration_ms, 'emotion': chunk.emotion, 'intensity': chunk.intensity, 'speed': chunk.speed, 'pitch': chunk.pitch, 'interrupted': chunk.interrupted, 'data_url': data_url}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/v1/voice/recognize")
+async def voice_recognize_api(file: UploadFile = File(...)):
+    """真实本地 ASR：上传 wav 字节 → 文本。失败如实返回空。"""
+    from runtime.stt import stt_provider
+    data = await file.read()
+    if not data:
+        return JSONResponse(status_code=400, content={"error": "empty_audio"})
+    text = await stt_provider.transcribe(data)
+    return {"text": text or ""}
+
+
+@app.post("/v1/voice/chat")
+async def voice_chat_api(file: UploadFile = File(...)):
+    """真实语音会话：ASR → BrainPipeline(D6) → 回复文本（后续由 /v1/voice/stream 发声）。"""
+    from runtime.stt import stt_provider
+    data = await file.read()
+    text = await stt_provider.transcribe(data or b"")
+    if not text:
+        return JSONResponse(status_code=400, content={"error": "asr_empty"})
+    user_id = "web_user"
+    state = user_states.get(user_id)
+    char_id = (state or {}).get("character_id", "")
+    if not char_id:
+        default_char = char_mgr.get_default()
+        char_id = default_char.id if default_char else ""
+    if not char_id:
+        return JSONResponse(status_code=400, content={"error": "no_character"})
+    temperature = float((state or {}).get("temperature") or 0.7)
+    try:
+        res = await _pipeline_web_chat_payload(
+            user_id, char_id, temperature,
+            [{"role": "user", "content": text}], [text], [])
+    except Exception as e:
+        logger.warning(f"[VoiceChat] pipeline 失败: {e}")
+        return JSONResponse(status_code=500, content={"error": "pipeline_failed"})
+    reply = str((res.get("payload") or {}).get("choices", [{}])[0].get("message", {}).get("content") or "")
+    return {"asr_text": text, "reply": reply, "char_id": char_id}
+
+
+@app.post("/v1/voice/interrupt")
+async def voice_interrupt_api():
+    from runtime.voice_pipeline import voice_pipeline
+    return await voice_pipeline.interrupt()
+
+
+@app.get("/v1/avatar/events")
+async def avatar_events_stream():
+    """Avatar JSON 事件订阅：前端/3D 皮套连上后接收统一 AvatarEvent。"""
+    from runtime.avatar import avatar_controller
+    q: asyncio.Queue = asyncio.Queue()
+    ok = avatar_controller.subscribe_json(q)
+    if not ok:
+        return JSONResponse(status_code=503, content={"error": "json_avatar_unavailable"})
+
+    async def gen():
+        try:
+            while True:
+                ev = await asyncio.wait_for(q.get(), timeout=15)
+                yield f"data: {json.dumps({'type': 'avatar_event', **ev}, ensure_ascii=False)}\n\n"
+        except asyncio.TimeoutError:
+            yield ": ping\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            from runtime.avatar import avatar_controller as _ac
+            try:
+                _ac._providers["json"].unsubscribe(q)
+            except Exception:
+                pass
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ============ STT（§42） ============

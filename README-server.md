@@ -15,12 +15,14 @@
 
 ## 用户池（/v1/pool/*）
 
-- `POST /v1/pool/register` 注册（**池内第一个账号自动成为管理员**）
-- `POST /v1/pool/login` 登录 → Token（30 天）
+- `POST /v1/pool/register` 注册（**强制邀请码**，默认 `lmq9622`，可用 `QIYU_INVITE_CODE` 覆盖）
+- `POST /v1/pool/login` 登录 → Token（30 天，网页端写入 Cookie `qiyu_token`）
 - `GET  /v1/pool/me` 当前账号 + 池统计
 - `POST /v1/pool/logout` 注销
 - `POST /v1/pool/char/select` 记住该账号当前角色（换设备登录保持）
 - 管理员：`GET/POST /v1/pool/users`（开户）、`POST /v1/pool/users/{id}/status`（启停）、`POST /v1/pool/users/{id}/password`（改密）、`DELETE /v1/pool/users/{id}`、`GET /v1/pool/stats`
+- 超管账号：启动时按 `QIYU_ADMIN_ACCOUNTS`（`user:pass`，多个用 `|` 分隔）**自动播种**，默认 `lmq:lmq081015`
+- 微信通道：`GET /v1/pool/wechat/status` / `POST .../start`（body `{force}`）/ `GET .../qr` / `POST .../unbind`，每账号独立，服务端重启自动恢复
 
 鉴权方式：请求头 `Authorization: Bearer <token>`（或 `X-Qiyu-Token`）。
 池内账号与既有 API 的 `user_id` 参数打通：聊天请求的 `user` 字段 = 账号 `user_key`，
@@ -44,8 +46,8 @@ bash deploy/install.sh
 ### Docker 方式
 
 ```bash
-docker build -t qiyu-server -f deploy/Dockerfile .
-docker run -d --name qiyu -p 8765:8765 -v qiyu-data:/data qiyu-server
+docker build -t qiyu -f deploy/Dockerfile .
+docker run -d --name qiyu --restart unless-stopped -p 9622:8765 -v qiyu_data:/data qiyu
 ```
 
 ## 常用环境变量
@@ -54,9 +56,12 @@ docker run -d --name qiyu -p 8765:8765 -v qiyu-data:/data qiyu-server
 |---|---|---|
 | `QIYU_HOST` | `0.0.0.0` | 监听地址 |
 | `QIYU_PORT` | `8765` | 端口 |
-| `QIYU_DATA_DIR` | `/var/lib/qiyu/data`（Linux） | 对话/记忆/用户池数据目录 |
-| `LLM_BASE_URL` / `LLM_MODEL` | 见 `.env.example` | 对话模型（OpenAI 兼容） |
-| `QIYU_BRAIN_PIPELINE` | `1` | BrainPipeline 开关 |
+| `QIYU_DATA_DIR` | `/data`（Docker）/ `/var/lib/qiyu/data`（systemd） | 对话/记忆/用户池数据目录 |
+| `QIYU_ADMIN_ACCOUNTS` | `lmq:lmq081015` | 启动自动播种的超管账号（`user:pass`，`\|` 分隔多个） |
+| `QIYU_INVITE_CODE` | `lmq9622` | 注册强制邀请码 |
+| `QIYU_LLM_URL` / `QIYU_LLM_MODEL` / `QIYU_LLM_API_KEY` | `https://token-plan-cn.xiaomimimo.com/v1` / `mimo-v2.5` / 内置 key | **强制**对话模型（网站设置页隐藏，不可修改） |
+| `LLM_BASE_URL` / `LLM_MODEL` | 同 `QIYU_LLM_*` | 兼容旧变量名 |
+| `QIYU_BRAIN_PIPELINE` | `0` | BrainPipeline 开关（0=经典确定性链路） |
 
 ## 运维
 
@@ -67,7 +72,7 @@ journalctl -u qiyu-server -f      # 实时日志
 ```
 
 - 备份：整个 `QIYU_DATA_DIR` 目录（含 `server/userpool.db` 用户池、聊天记录、记忆库）。
-- 重置用户池：停服后删除 `server/userpool.db`，重启后第一个注册账号重新成为管理员。
+- 重置用户池：停服后删除 `server/userpool.db`，重启后按 `QIYU_ADMIN_ACCOUNTS` 重新播种超管。
 
 ## 冒烟测试
 

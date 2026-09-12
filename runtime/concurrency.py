@@ -19,6 +19,15 @@ from loguru import logger
 
 KINDS = ("llm", "tool", "memory", "vision", "tts", "stt", "avatar")
 
+
+def _task_id() -> int:
+    """当前 asyncio 任务 id（无事件循环时返回 0）。"""
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        return 0
+    return id(task) if task is not None else 0
+
 # 每类并行默认权重（相对总闸）——工具联网类最保守
 _KIND_WEIGHT = {"llm": 1.0, "tool": 0.4, "memory": 0.8, "vision": 0.6,
                 "tts": 0.5, "stt": 0.5, "avatar": 0.6}
@@ -61,6 +70,10 @@ class GlobalConcurrencyLimiter:
         self._inflight: dict[str, int] = {}
         self._total = 0
         self._peak = 0
+        # 同协程重入记录：task_id -> {kind: 嵌套深度}
+        # active 后台任务先占 slot("tool")，内部 ToolAgent.search() 又占一次，
+        # 而 tool 分闸上限=1 → 自锁；重入计数可避免这种同协程死锁。
+        self._held: dict[int, dict[str, int]] = {}
 
     def configured_limit(self) -> int:
         """读取运行时设置里的 parallel_requests 并换算为整数（0=unlimited）。"""
@@ -80,6 +93,10 @@ class GlobalConcurrencyLimiter:
 
     def _apply_limit(self, limit: int) -> None:
         # 重建信号量（asyncio 信号量无法改大小；重建是安全的，等当前持有者释放后生效）
+        # 有请求在飞时绝不重建：否则在飞请求 release 到新信号量，会凭空多出额度
+        # （实测 tool 上限 1 却在飞 2，且计数错乱）。
+        if self._total > 0:
+            return
         self._global = asyncio.Semaphore(limit) if limit > 0 else None
         for k in KINDS:
             sub = max(1, int(limit * _KIND_WEIGHT.get(k, 0.5))) if limit > 0 else 0
@@ -102,11 +119,20 @@ class GlobalConcurrencyLimiter:
     async def acquire(self, kind: str = "llm") -> bool:
         kind = kind if kind in self._slots else "llm"
         self.refresh()
+        tid = _task_id()
+        d = self._held.setdefault(tid, {})
+        if d.get(kind, 0) > 0:
+            # 同协程重入：不再抢占信号量，只累加深度
+            d[kind] += 1
+            self._inflight[kind] = self._inflight.get(kind, 0) + 1
+            self._total += 1
+            return True
         if self._global is not None:
             await self._global.acquire()
         sem = self._slots.get(kind)
         if sem is not None:
             await sem.acquire()
+        d[kind] = 1
         self._inflight[kind] = self._inflight.get(kind, 0) + 1
         self._total += 1
         self._peak = max(self._peak, self._total)
@@ -116,6 +142,16 @@ class GlobalConcurrencyLimiter:
         kind = kind if kind in self._slots else "llm"
         self._inflight[kind] = max(0, self._inflight.get(kind, 0) - 1)
         self._total = max(0, self._total - 1)
+        tid = _task_id()
+        d = self._held.get(tid) or {}
+        depth = d.get(kind, 0)
+        if depth > 1:
+            d[kind] = depth - 1
+            return
+        if depth == 1:
+            d.pop(kind, None)
+            if not d:
+                self._held.pop(tid, None)
         sem = self._slots.get(kind)
         if sem is not None:
             try:

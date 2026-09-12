@@ -444,8 +444,11 @@ class SaveRoutesRequest(BaseModel):
     rules: list[dict]
 
 class SaveSettingsRequest(BaseModel):
+    llm_provider: Optional[str] = None   # deepseek/glm/.../custom
     llm_url: Optional[str] = None
     llm_model: Optional[str] = None
+    llm_extra: Optional[dict] = None     # 供应商额外参数，例如 MiMo token_plan
+    realtime_prefer_official: Optional[bool] = None  # MiniMind 强制官方 D6（关闭后允许 GGUF）
     llm_route_url: Optional[str] = None
     llm_route_model: Optional[str] = None
     api_key: Optional[str] = None

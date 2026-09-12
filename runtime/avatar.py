@@ -122,6 +122,37 @@ class AvatarState:
         }
 
 
+@dataclass
+class AvatarEvent:
+    """统一 Avatar 事件：Live2D / VRM / V3D / VRC 消费同一结构。"""
+    emotion: str = "neutral"
+    intensity: float = 0.0
+    duration: float = 1.0
+    action: str = "idle"
+    mouth: float = 0.0
+    blink: float = 1.0
+    breathing: float = 0.4
+    speaking: bool = False
+    expression: str = ""
+    gesture: str = ""
+    prosody: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "emotion": self.emotion,
+            "intensity": round(max(0.0, min(1.0, self.intensity)), 3),
+            "duration": round(float(self.duration), 2),
+            "action": self.action,
+            "mouth": round(max(0.0, min(1.0, self.mouth)), 3),
+            "blink": round(max(0.0, min(1.0, self.blink)), 3),
+            "breathing": round(max(0.0, min(1.0, self.breathing)), 3),
+            "speaking": bool(self.speaking),
+            "expression": self.expression,
+            "gesture": self.gesture,
+            "prosody": dict(self.prosody or {}),
+        }
+
+
 class AvatarProvider(AIProvider):
     """头像 Provider 基类：把 AI 动作意图转成具体平台命令。"""
 
@@ -246,6 +277,54 @@ class VRCAvatarProvider(AvatarProvider):
             "ts": time.time(),
         }
 
+
+class JsonAvatarBridgeProvider(AvatarProvider):
+    """JSON Avatar 后端：模型写 AvatarEvent，前端/3D 皮套订阅同一 JSON。
+    没有订阅者时如实 unavailable（不假装已渲染）。"""
+
+    id = "json"
+    name = "Avatar（JSON Bridge / L2D / V3D）"
+    avatar_type = "json"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._subscribers: set = set()
+
+    def subscribe(self, q) -> None:
+        self._subscribers.add(q)
+
+    def unsubscribe(self, q) -> None:
+        self._subscribers.discard(q)
+
+    def probe(self) -> ProviderStatus:
+        if self._subscribers:
+            return ProviderStatus(True, backend="json", device="event-bus",
+                                  reason=f"{len(self._subscribers)} 个订阅客户端")
+        return ProviderStatus(False, backend="json", device="event-bus",
+                              reason="无订阅客户端（前端/3D 皮套尚未连接）")
+
+    def status(self) -> ProviderStatus:
+        return self.probe()
+
+    async def render(self, action: AvatarAction) -> dict:
+        ev = AvatarEvent(emotion=action.emotion, intensity=action.intensity,
+                         action=action.action, speaking=bool(action.text),
+                         expression=action.expression, gesture=action.gesture)
+        return await self.render_event(ev)
+
+    async def render_event(self, event: AvatarEvent) -> dict:
+        payload = event.to_dict()
+        delivered = 0
+        for q in list(self._subscribers):
+            try:
+                q.put_nowait(payload)
+                delivered += 1
+            except Exception:
+                self.unsubscribe(q)
+        return {"provider": "json", "type": "avatar_event", "delivered": delivered,
+                "event": payload, "ts": time.time()}
+
+
 class GenericAvatarController:
     """统一头像控制器：按 avatar_type 分发到具体 Provider，并维护平滑状态。"""
 
@@ -254,6 +333,7 @@ class GenericAvatarController:
         self._state = AvatarState()
         self._register(Live2DAvatarProvider())
         self._register(VRCAvatarProvider())
+        self._register(JsonAvatarBridgeProvider())
 
     def _register(self, p: AvatarProvider) -> None:
         self._providers[p.avatar_type] = p
@@ -265,6 +345,34 @@ class GenericAvatarController:
 
     def state(self) -> dict:
         return self._state.to_dict()
+
+    def subscribe_json(self, q) -> bool:
+        p = self._providers.get("json")
+        if p is None:
+            return False
+        p.subscribe(q)
+        return True
+
+    async def emit_event(self, event: AvatarEvent, avatar_type: str = "json") -> dict:
+        """统一 AvatarEvent → 具体后端；Live2D/VRC 自动从 event 构造 action。"""
+        p = self._providers.get(avatar_type)
+        if p is None:
+            return {"provider": avatar_type, "error": "unsupported_avatar_type"}
+        if hasattr(p, "render_event"):
+            cmd = await p.render_event(event)
+        else:
+            action = AvatarAction(emotion=event.emotion, intensity=event.intensity,
+                                  action=event.action, expression=event.expression,
+                                  gesture=event.gesture, text="",
+                                  speed=float(event.prosody.get("speed") or 1.0))
+            cmd = await p.render(action)
+        if event.emotion in EMOTIONS:
+            self._state.current_emotion = event.emotion
+            self._state.current_intensity = min(1.0, float(event.intensity))
+        self._state.last_action = event.action or "idle"
+        self._state.provider = avatar_type
+        self._state.updated_at = time.time()
+        return cmd
 
     async def apply(self, action: AvatarAction, avatar_type: str = "live2d") -> dict:
         """AI 输出动作意图 → 对应平台命令；状态做平滑（避免剧烈跳变）。"""

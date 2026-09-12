@@ -110,8 +110,11 @@ def is_injection(text: str) -> bool:
 
 # M4：运行时设置全量默认值（启动即完整加载，调用方无需在各自位置散落默认值）
 DEFAULT_RUNTIME_SETTINGS = {
+    "llm_provider": "",
     "llm_url": LLM_URL,
     "llm_model": LLM_MODEL,
+    "llm_extra": {},
+    "realtime_prefer_official": True,
     "llm_route_url": LLM_ROUTE_URL,
     "llm_route_model": LLM_ROUTE_MODEL,
     "api_key": "",

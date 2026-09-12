@@ -18,17 +18,26 @@ from loguru import logger
 from runtime.benchmark import BenchmarkResult, micro_benchmark
 from runtime.hardware import BackendCapability, HardwareDetector, HardwareProfile
 from runtime.providers import ProviderKind, ProviderRegistry, RealtimeBrainProvider
-from runtime.realtime import (UnavailableRealtimeBackend, build_realtime_backend,
-                              discover_models)
+from runtime.realtime import UnavailableRealtimeBackend, discover_models
+from runtime.realtime_unified import build_realtime_provider
 
 # backend 优先级：NVIDIA+CUDA → Vulkan → CPU（仅作初始候选排序，最终由 MicroBenchmark 定夺）
 BACKEND_PRIORITY = ("cuda", "vulkan", "cpu")
+
+_runtime_manager_instance = None
+
+
+def get_runtime_manager():
+    """demo/Router 使用的全局 RuntimeManager（进程内单实例约定）。"""
+    return _runtime_manager_instance
 
 
 class RuntimeManager:
     """Qiyu 运行时管理器：统一管理 Provider 生命周期与 backend 选择。"""
 
     def __init__(self) -> None:
+        global _runtime_manager_instance
+        _runtime_manager_instance = self
         self.registry = ProviderRegistry()
         self.hardware = HardwareDetector()
         self.profile: Optional[HardwareProfile] = None
@@ -44,13 +53,14 @@ class RuntimeManager:
         self.profile = self.hardware.detect()
         self.backends = self.hardware.probe_backends()
         self._started_at = time.time()
-        # Realtime Brain：按硬件能力 + MiniMind-O 模型存在性选择真实后端（诚实降级）
-        self._realtime = build_realtime_backend(self.profile, self.backends)
+        # v0.0.26：统一 Auto Provider —— 业务只认 RealtimeBrainProvider，
+        # 实际 official/gguf/cuda 候选由 Auto 启动实测后选择，不做固定优先级
+        self._realtime = build_realtime_provider(auto_bench=True)
         self.registry.register(self._realtime, fallback_ids=[])
-        self._realtime_backend = self.select_backend("realtime")
+        self._realtime_backend = None
         logger.info(
             f"[Runtime] 启动完成，Realtime Brain={self._realtime.id} "
-            f"backend={self._realtime_backend.backend if self._realtime_backend else '无'}"
+            f"候选={sorted(getattr(self._realtime, 'candidates', {}) or {}) or '无'}"
         )
 
     def stop(self) -> None:
@@ -62,29 +72,12 @@ class RuntimeManager:
         return self._started_at > 0
 
     # ---------- 微基准 + backend 选择（规格§4/§13） ----------
-    async def bench(self, bench_fn=None) -> list[BenchmarkResult]:
-        """对可用候选 backend 跑 MicroBenchmark（真实 bench_fn 或硬件启发式）。
-
-        默认 bench_fn：对当前 Realtime 后端真实测 TTFT/tok/s（仅测它能跑的 backend，
-        其它候选交给启发式估算，绝不把测不到的 backend 当实测）。"""
-        candidates = [c for c in self.backends if c.available]
-        if bench_fn is None:
-            bench_fn = self._default_bench_fn()
-        self._bench_results = await micro_benchmark.benchmark(candidates, self.profile, bench_fn)
-        return self._bench_results
-
-    def _default_bench_fn(self):
-        """把当前 Realtime 后端的 bench_inference 包成 MicroBenchmark 需要的回调。"""
-        backend_name = getattr(self._realtime, "backend_name", "") if self._realtime else ""
-        bench_inf = getattr(self._realtime, "bench_inference", None) if self._realtime else None
-        if not backend_name or bench_inf is None:
-            return None  # 无真实后端 → 纯硬件启发式（和之前行为一致）
-
-        async def _fn(cap: BackendCapability):
-            if cap.backend != backend_name:
-                return None  # 该 backend 跑不了当前模型 → 启发式兜底，不假装实测
-            return await bench_inf()
-        return _fn
+    async def bench(self, bench_fn=None) -> list[dict]:
+        """v0.0.26：把实测交给统一 Auto Provider（不在这里做固定优先级/启发式兜底）。"""
+        if self._realtime is not None:
+            self._bench_results = await self._realtime.benchmark()
+            return self._bench_results
+        return []
 
     def select_backend(self, role: str) -> Optional[BackendCapability]:
         """先看基准结果，没有则按能力矩阵 + 优先级选择（CPU 永远是底线）。"""
@@ -109,7 +102,7 @@ class RuntimeManager:
 
     # ---------- 模型加载/卸载（规格§12/§11） ----------
     def model_status(self) -> dict:
-        """MiniMind-O 模型清单 + 组件运行计划（每组件独立 backend，规格§6）。"""
+        """MiniMind-O 模型清单 + Auto 已选后端（每组件独立 backend，规格§6）。"""
         model = discover_models()
         plan = []
         if self._realtime is not None and hasattr(self._realtime, "model_plan"):
@@ -128,49 +121,46 @@ class RuntimeManager:
             "components": model.present_components(),
             "plan": [p.to_dict() for p in plan],
             "runtime": _rt,
-            "realtime_available": self._realtime.status().available if self._realtime else False,
-            "omni": {
-                "model_dir": str(omni.model_dir) if omni else "",
-                "complete": omni.available() if omni else False,
-                "device": omni.backend_name if omni else "",
-                "loaded": omni.loaded if omni else False,
-                "load_error": omni.load_error or "" if omni else "",
-            } if omni else None,
+            "realtime_available": (self._realtime.health().get("ok") if self._realtime else False),
+            "selected_backend": self._active_backend_name(),
+            "selected_model": self._active_model_name(),
+            "auto": {
+                "candidates": getattr(self._realtime, "to_dict", lambda: {})().get("candidates", []),
+                "selection_reason": getattr(self._realtime, "selection_reason", ""),
+                "benchmarks": getattr(self._realtime, "bench_results", []),
+            } if self._realtime is not None else None,
         }
 
-    def load_model(self, path: str = "") -> dict:
-        """加载 MiniMind-O Thinker 权重（安装器下载后调用）；成功返回 status。"""
+    def _active_backend_name(self) -> str:
+        if self._realtime is None:
+            return ""
         try:
-            if hasattr(self._realtime, "_runtime") and getattr(self._realtime, "_runtime", None) is not None:
-                rt = self._realtime._runtime
-                if not rt.available():
-                    return {"ok": False, "reason": self._realtime._unavailable_reason()}
-                ok = rt.ready()
-                return {"ok": ok, "path": str(rt.model_dir), "status": self.model_status()}
-            from runtime.realtime import _load_model
-            if not path:
-                model = discover_models()
-                fname = model.files.get("thinker", "")
-                if not fname:
-                    return {"ok": False, "reason": "models/realtime/ 缺少 Thinker 权重"}
-                path = str(model.root / fname)
-            gen = _load_model(getattr(self._realtime, "backend_name", "cpu") if self._realtime else "cpu", path)
-            if gen is None:
-                return {"ok": False, "reason": "模型加载失败（推理运行时缺失或文件损坏）"}
-            return {"ok": True, "path": path, "status": self.model_status()}
-        except Exception as e:
-            return {"ok": False, "reason": str(e)}
+            return str(self._realtime.health().get("backend") or "")
+        except Exception:
+            return ""
 
-    def unload_model(self) -> dict:
+    def _active_model_name(self) -> str:
+        if self._realtime is None:
+            return ""
+        try:
+            return str(self._realtime.health().get("model") or "")
+        except Exception:
+            return ""
+
+    async def load_model(self, path: str = "") -> dict:
+        """加载 MiniMind-O Thinker 权重（安装器下载后调用）；成功返回 status。"""
+        if self._realtime is None:
+            return {"ok": False, "reason": "Realtime Provider 未初始化"}
+        r = await self._realtime.load(backend=str(path or "auto"))
+        r["path"] = str(path or "")
+        r["status"] = self.model_status()
+        return r
+
+    async def unload_model(self) -> dict:
         """卸载 Realtime 模型（释放内存；下次 judge 重新加载）。"""
         if self._realtime is not None:
             try:
-                unloader = getattr(self._realtime, "unload", None)
-                if callable(unloader):
-                    unloader()
-                elif hasattr(self._realtime, "_gen"):
-                    self._realtime._gen = None
-                    self._realtime._gen_checked = False
+                return await self._realtime.unload()
             except Exception as e:
                 logger.warning(f"[Runtime] 卸载 Realtime 模型失败: {e}")
         return {"ok": True}
@@ -198,14 +188,21 @@ class RuntimeManager:
     # ---------- 状态 ----------
     def status(self) -> dict:
         from runtime.perf import perf_monitor
+        bench = []
+        if self._realtime is not None:
+            bench = getattr(self._realtime, "bench_results", []) or []
         return {
             "running": self.running,
             "started_at": round(self._started_at, 3),
             "hardware": self.profile.to_dict() if self.profile else {},
             "backends": [c.to_dict() for c in self.backends],
-            "benchmark": micro_benchmark.summary(),
+            "benchmark": {
+                "ran_at": round(getattr(self._realtime, "_bench_at", 0.0), 3),
+                "results": bench,
+            },
             "realtime": {
-                "backend": self._realtime_backend.backend if self._realtime_backend else "",
+                "backend": self._active_backend_name(),
+                "model": self._active_model_name(),
                 "provider": self.realtime.to_dict(),
             },
             "models": self.model_status(),

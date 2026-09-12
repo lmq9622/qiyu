@@ -1,5 +1,32 @@
 # 栖语 (Qiyu) - 本地 AI 陪伴机器人
 
+## 当前 Runtime 架构（P0/P1，区别于下方旧 Letta 架构）
+
+```text
+MessageGateway（Web / 微信 / pending / 主动）
+→ BrainPipeline（MiniMind-O 永远第一入口）
+→ BrainDecision（内部控制：direct/main/tool/vision）
+→ Direct | MainBrain | ToolAgent | Vision
+→ Emotion/State → TTS/Avatar（待 P2）
+```
+
+状态：
+- P0：BrainDecision/BrainPipeline/MessageGateway 已真实跑通；
+- P1：ToolAgent 真执行、pending 合并、主动/Storycheck 入口代码已统一，E2E 仍在补测；
+- MiniMind v4.1 标签化 LoRA（当前推荐 D4）已能经 `QIYU_REALTIME_MODEL_DIR` +
+  `QIYU_REALTIME_ADAPTER` 真实挂载；D4 已无重复/空回类坏例，简单直答与 RAG 均优于 tag-D，
+  详见 `PROJECT_LOG.md M14/M15`。
+- 2026-09-06：不再沿用旧 D 系 LoRA，按官方 minimind-o 链路（T2A→A2A→I2T）在
+  x99（192.168.2.6，2×V100）从头训练，先得官方等价基线再做人设定制；当前运行
+  mini 冒烟/7 阶段 full 中，进度见 `PROJECT_LOG.md M16`。
+- 前端整机重写为 `ui2/`（液玻璃风格 x86 桌面壳），开发入口 `/app2`，
+  打包入口已改为 `client.py → /app2`；本轮修改合并进 0.1.0，最终打包待
+  新官方权重训练完成后执行。
+- 2026-09-09/10：Quest MR 角色实时行为系统落在
+  `quest-mr-client/`：Protocol v1.1、Character Behavior Runtime、Reflex、
+  Behavior Policy（x99 CUDA 训练）、Human Motion Capture / Motion Understanding /
+  SharedAttention / InteractionState 已实现；真机验收待 Quest 连接。
+
 ## 架构
 
 ```

@@ -41,6 +41,7 @@ node_modules/
 wechatauto_logs/
 test_harness/report/
 test_harness/.tmpdata/
+runtime/omni/out/
 _draft*.md
 _probe*.py
 _audit*.py

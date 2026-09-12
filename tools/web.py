@@ -95,20 +95,35 @@ async def _weather_now(query: str) -> list:
     return []
 
 
+_SEARCH_BUDGET = 20.0  # 单次搜索总时限：天气 + 多引擎降级链合计，避免后台查证占用并发闸过久、（卸食互动聊天）
+
+
 async def web_search(query: str, top_k: int = 5) -> list:
-    """搜索网页，返回 [{title, url, snippet}]，全部失败返回 []。天气类查询先用 wttr.in 兜底（真实数据），
+    """搜索网页，返回 [{title, url, snippet}]，全部失败/超时返回 []。天气类查询先用 wttr.in 兜底（真实数据），
     再走降级链：Bing(主) → Sogou → 搜狗微信 → 百度联想 → 百度移动 → 百度桌面。"""
     out = []
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + _SEARCH_BUDGET
+
+    async def _within(coro, max_wait: float) -> list:
+        return await asyncio.wait_for(coro, timeout=max(1.0, min(max_wait, deadline - loop.time())))
+
     try:
-        out.extend(await _weather_now(query))
+        out.extend(await _within(_weather_now(query), 8.0))
+    except asyncio.TimeoutError:
+        logger.warning("[联网] 天气兜底超时，跳过")
     except Exception as e:
         logger.warning(f"[联网] 天气兜底失败: {e}")
     for fn in (_bing_search, _sogou_search, _sogou_wx_search, _baidu_mobile_search, _baidu_suggest, _baidu_search):
+        if deadline - loop.time() <= 0:
+            break
         try:
-            got = await fn(query, top_k)
+            got = await _within(fn(query, top_k), 7.0)
             if got:
                 out.extend(got)
                 break
+        except asyncio.TimeoutError:
+            logger.warning(f"[联网] 搜索降级: {fn.__name__} 超时")
         except Exception as e:
             logger.warning(f"[联网] 搜索降级: {type(e).__name__}: {e}")
     # 去重（同 URL 只留一条，天气结果优先）

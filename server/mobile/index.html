@@ -143,6 +143,12 @@ input, textarea { font: inherit; color: var(--text); background: transparent; bo
   background:rgba(20,24,32,.95); border:1px solid var(--border); color:var(--text); padding:10px 18px;
   border-radius:12px; font-size:14px; z-index:20; opacity:0; pointer-events:none; transition:all .22s; max-width:86vw; text-align:center; }
 #toast.on { opacity:1; transform:translateX(-50%) translateY(0); }
+/* ===== 表单控件与微信状态标签（微信通道/体验设置面板用） ===== */
+select { background: var(--bg-soft); border:1px solid var(--border); border-radius:10px; color: var(--text); font-size:14px; }
+select option { background: var(--bg-soft); color: var(--text); }
+input[type="range"] { accent-color: var(--accent); }
+.tag.wx { background:rgba(52,211,153,.14); color:var(--ok); }
+.tag.wx-off { background:rgba(107,115,133,.15); color:var(--text-3); }
 </style>
 </head>
 <body>
@@ -161,8 +167,9 @@ input, textarea { font: inherit; color: var(--text); background: transparent; bo
     <div class="field"><label>用户名</label><input id="authUser" autocomplete="username" placeholder="用户名"></div>
     <div class="field"><label>密码</label><input id="authPass" type="password" autocomplete="current-password" placeholder="至少 4 位"></div>
     <div class="field hidden" id="nickField"><label>昵称（可选）</label><input id="authNick" placeholder="怎么称呼你？"></div>
+    <div class="field hidden" id="inviteField"><label>邀请码（必填）</label><input id="authInvite" placeholder="向管理员索取" autocomplete="off"></div>
     <button class="btn btn-primary" id="authGo" onclick="doAuth()">登 录</button>
-    <div class="auth-tip" id="authTip">首次注册的账号将自动成为管理员</div>
+    <div class="auth-tip" id="authTip">登录态保存在浏览器 Cookie（30 天），下次打开自动进入</div>
   </section>
 
   <!-- 主界面：聊天 -->
@@ -249,17 +256,19 @@ function switchTab(mode) {
   $('tabLogin').classList.toggle('on', mode==='login');
   $('tabReg').classList.toggle('on', mode==='reg');
   $('nickField').classList.toggle('hidden', mode!=='reg');
+  $('inviteField').classList.toggle('hidden', mode!=='reg');
   $('authGo').textContent = mode==='login' ? '登 录' : '注 册';
 }
 async function doAuth() {
   const username = $('authUser').value.trim();
   const password = $('authPass').value;
   if (!username || !password) { toast('请填写用户名和密码'); return; }
+  if (authMode === 'reg' && !$('authInvite').value.trim()) { toast('请填写邀请码'); return; }
   $('authGo').disabled = true;
   try {
     const r = authMode === 'login'
       ? await api('/v1/pool/login', { method:'POST', body:{ username, password }, auth:false })
-      : await api('/v1/pool/register', { method:'POST', body:{ username, password, nickname: $('authNick').value.trim() }, auth:false });
+      : await api('/v1/pool/register', { method:'POST', body:{ username, password, nickname: $('authNick').value.trim(), invite_code: $('authInvite').value.trim() }, auth:false });
     S.token = r.token; S.user = r.user;
     localStorage.setItem('qiyu_token', r.token);
     await enterChat();
@@ -437,6 +446,97 @@ async function sendMsg() {
 }
 function scrollBottom() { const b = $('messages'); b.scrollTop = b.scrollHeight; }
 
+
+/* ===== 微信 ClawBot 通道（每用户独立；数据与监听全在服务器端） ===== */
+const WX = { timer: 0, polling: false, last: null };
+async function wxRefresh() {
+  const stEl = $('wxState');
+  if (!stEl) return;
+  try {
+    const st = await api('/v1/pool/wechat/status');
+    WX.last = st;
+    if (st.running) stEl.innerHTML = '<span class="tag wx">监听中</span>';
+    else if (st.bound) stEl.innerHTML = '<span class="tag wx-off">已绑定 · 未监听</span>';
+    else stEl.innerHTML = '<span class="tag wx-off">未绑定</span>';
+    const runEl = $('wxRun');
+    if (runEl) runEl.textContent = st.running ? '运行中' : (st.bound ? '已停止' : '—');
+    if (st.running) { const q = $('wxQr'); if (q) q.innerHTML = ''; }
+  } catch(e) { /* 会话失效等场景忽略 */ }
+}
+async function wxStart() {
+  if (WX.polling) { toast('正在等待扫码…'); return; }
+  try {
+    const r = await api('/v1/pool/wechat/start', { method:'POST', body:{ force:false } });
+    if (r.running) { toast('微信已在监听，无需扫码'); wxRefresh(); return; }
+    // 等待二维码下发（首次启动有建连时间）
+    let qr = '';
+    for (let i = 0; i < 8 && !qr; i++) {
+      await new Promise(res => setTimeout(res, 800));
+      const q = await api('/v1/pool/wechat/qr');
+      if (q.running) { toast('已恢复上次登录态，微信监听中'); wxRefresh(); return; }
+      if (q.qr) { qr = q.qr; break; }
+      if (q.qr_status === 'error') { toast(q.message || '获取二维码失败，请查看服务器日志', 4000); return; }
+    }
+    const box = $('wxQr');
+    if (box && qr) box.innerHTML = '<img src="' + qr + '" alt="微信绑定二维码" style="width:170px;height:170px;border-radius:12px;border:1px solid var(--border)">';
+    // 轮询状态：扫码成功 → running；失败 → error
+    WX.polling = true;
+    clearInterval(WX.timer);
+    WX.timer = setInterval(async () => {
+      let st;
+      try { st = await api('/v1/pool/wechat/status'); }
+      catch(e) { clearInterval(WX.timer); WX.polling = false; return; }
+      if (st.running) {
+        clearInterval(WX.timer); WX.polling = false;
+        toast('微信扫码成功，服务器端已开始独立监听');
+        const b = $('wxQr'); if (b) b.innerHTML = '';
+        wxRefresh();
+      } else if (st.qr_status === 'error') {
+        clearInterval(WX.timer); WX.polling = false;
+        toast(st.qr_message || '微信绑定失败，请重试', 4000);
+      }
+    }, 2000);
+  } catch(e) { toast(e.message || '微信通道启动失败'); }
+}
+async function wxUnbind() {
+  try {
+    await api('/v1/pool/wechat/unbind', { method:'POST' });
+    clearInterval(WX.timer); WX.polling = false;
+    const b = $('wxQr'); if (b) b.innerHTML = '';
+    toast('已解绑微信');
+    wxRefresh();
+  } catch(e) { toast(e.message || '解绑失败'); }
+}
+
+/* ===== 对话体验设置（思考强度/温度/显示思考；LLM 地址与 Key 由服务端钉死，前端不暴露） ===== */
+async function loadSettings() {
+  const think = $('setThinking'), temp = $('setTemp'), show = $('setShowThink');
+  if (!think || !temp || !show) return;
+  try {
+    const s = await api('/v1/settings');
+    if (s.thinking_level && Array.from(think.options).some(o => o.value === s.thinking_level)) think.value = s.thinking_level;
+    const t = (s.llm && s.llm.default_temperature != null) ? Number(s.llm.default_temperature) : 0.8;
+    temp.value = String(t);
+    const v = $('setTempVal'); if (v) v.textContent = t.toFixed(1);
+    show.checked = !!s.show_thinking;
+  } catch(e) { /* 设置读取失败不影响聊天 */ }
+}
+function bindTempSlider() {
+  const temp = $('setTemp'); if (!temp) return;
+  const v = $('setTempVal');
+  temp.oninput = () => { if (v) v.textContent = Number(temp.value).toFixed(1); };
+}
+async function saveSettings() {
+  try {
+    await api('/v1/settings', { method:'POST', body:{
+      thinking_level: $('setThinking').value,
+      show_thinking: $('setShowThink').checked,
+      default_temperature: Number($('setTemp').value),
+    }});
+    toast('已保存');
+  } catch(e) { toast(e.message || '保存失败'); }
+}
+
 /* ===== 面板：角色 / 我的 / 管理 ===== */
 let panelMode = 'chars';
 function openPanel(mode) {
@@ -472,6 +572,40 @@ function renderPanel() {
         <div class="kv"><b>数据位置</b><span>服务器端</span></div>
       </div>
       <div class="card">
+        <h3>微信通道（独立 · 服务器端）</h3>
+        <div class="kv"><b>绑定状态</b><span id="wxState">检测中…</span></div>
+        <div class="kv"><b>监听状态</b><span id="wxRun">—</span></div>
+        <div id="wxQr" style="text-align:center;margin:8px 0"></div>
+        <div class="rowbtns">
+          <button class="btn btn-ghost" onclick="wxStart()">绑定微信</button>
+          <button class="btn btn-ghost" onclick="wxUnbind()">解绑</button>
+        </div>
+        <div style="font-size:11.5px;color:var(--text-3);margin-top:8px">绑定后无需保持网页打开：服务器端持续独立监听，微信消息直接回复；微信与网页共用同一份历史。</div>
+      </div>
+      <div class="card">
+        <h3>对话体验</h3>
+        <div class="field" style="margin-bottom:8px">
+          <label>思考强度</label>
+          <select id="setThinking" style="width:100%;padding:7px 8px;margin-top:4px">
+            <option value="off">关闭（off）</option>
+            <option value="low">低（low）</option>
+            <option value="mid">中（mid）</option>
+            <option value="high">高（high）</option>
+            <option value="ultra">极高（ultra）</option>
+          </select>
+        </div>
+        <div class="field" style="margin-bottom:8px">
+          <label>回复温度：<span id="setTempVal" style="color:var(--text)">0.8</span></label>
+          <input id="setTemp" type="range" min="0" max="1.5" step="0.1" value="0.8" style="width:100%;margin-top:6px">
+        </div>
+        <div class="field" style="margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input id="setShowThink" type="checkbox" style="width:auto"> 显示思考过程
+          </label>
+        </div>
+        <button class="btn btn-primary" style="width:100%" onclick="saveSettings()">保存体验设置</button>
+      </div>
+      <div class="card">
         <h3>会话</h3>
         <div class="rowbtns" style="margin-bottom:10px">
           <button class="btn btn-ghost" onclick="clearHistory()">清空当前聊天记录</button>
@@ -482,6 +616,7 @@ function renderPanel() {
         </div>
       </div>
       ${ (u.role==='admin') ? '<button class="btn btn-primary" onclick="openPanel(\'admin\')">用户池管理（管理员）</button>' : '' }`;
+      bindTempSlider(); loadSettings(); wxRefresh();
   }
   else if (panelMode === 'admin') { renderAdmin(); }
 }
@@ -512,7 +647,7 @@ async function renderAdmin() {
       ${users.map(u => `
         <div class="user-item">
           <div class="uinfo">
-            <div class="uname">${esc(u.username)} ${u.role==='admin'?'<span class="tag admin">管理员</span>':''} ${u.status!=='active'?'<span class="tag off">已停用</span>':''}</div>
+            <div class="uname">${esc(u.username)} ${u.role==='admin'?'<span class="tag admin">管理员</span>':''} ${u.status!=='active'?'<span class="tag off">已停用</span>':''} ${u.wechat_running?'<span class="tag wx">微信在线</span>':(u.wechat_bound?'<span class="tag wx-off">微信已绑</span>':'')}</div>
             <div class="umeta">${esc(u.nickname||'—')} · 消息 ${u.message_count ?? 0} 条</div>
           </div>
           <button class="mini-btn" onclick="adminResetPass(${u.id})">改密</button>
@@ -545,6 +680,7 @@ async function clearHistory() {
   } catch(e) { toast(e.message || '清空失败'); }
 }
 async function logout(silent=false) {
+  clearInterval(WX.timer); WX.polling = false;
   try { await api('/v1/pool/logout', { method:'POST' }); } catch(e) {}
   localStorage.removeItem('qiyu_token');
   S.token = ''; S.user = null;
@@ -555,7 +691,7 @@ async function logout(silent=false) {
 
 /* ===== 启动 ===== */
 (async function boot() {
-  if (!S.token) { showPage('auth'); return; }
+  // 无论本地是否存过 token，都先尝试 Cookie 会话（cookie 由服务端管理）
   showPage('chat');
   $('messages').innerHTML = '<div class="sys-note">正在恢复登录状态…</div>';
   try {
@@ -563,7 +699,10 @@ async function logout(silent=false) {
     S.user = me.user;
     await enterChat();
   } catch(e) {
-    logout(true);
+    // 会话无效/过期：清本地 token 回登录页（cookie 交给服务端处理）
+    localStorage.removeItem('qiyu_token');
+    S.token = ''; S.user = null;
+    showPage('auth');
   }
 })();
 </script>

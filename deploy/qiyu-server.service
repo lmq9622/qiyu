@@ -9,6 +9,14 @@ WorkingDirectory=__APP_DIR__
 Environment=QIYU_HOST=0.0.0.0
 Environment=QIYU_PORT=__PORT__
 Environment=QIYU_DATA_DIR=__DATA_DIR__
+Environment=QIYU_ADMIN_ACCOUNTS=lmq:lmq081015
+Environment=QIYU_INVITE_CODE=lmq9622
+Environment=QIYU_LLM_URL=https://token-plan-cn.xiaomimimo.com/v1
+Environment=QIYU_LLM_MODEL=mimo-v2.5
+Environment=QIYU_LLM_API_KEY=tp-cjjwixvhrbcfh9m3tes8hr7u74ny4i7zv2qq3ei7ofyh0uay
+Environment=LLM_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
+Environment=LLM_MODEL=mimo-v2.5
+Environment=QIYU_BRAIN_PIPELINE=0
 ExecStart=__PYTHON__ __APP_DIR__/server_entry.py
 Restart=always
 RestartSec=5

@@ -107,6 +107,36 @@ def _apply_emotion_delta(user_id: str, char_id: str, parsed: dict):
     es["updated_at"] = now
     _save_emotions()
 
+def _pre_reply_emotion_update(user_id: str, char_id: str, user_text: str):
+    """用户消息到达、Brain 尚未生成前，做一次确定性的情绪前置更新。
+
+    不是“回复后给情绪贴标签”：先让角色的 joy/sadness/anxiety/excitement 因为对方
+    这句话发生有边界的小幅变化，再让 BrainRouter/MainBrain 用更新后的状态表达。
+    """
+    t = (user_text or "").strip()
+    if not t or not user_id or not char_id:
+        return
+    delta = {}
+    reason = ""
+    if any(w in t for w in ("哈哈", "开心", "高兴", "好爽", "太好了", "好棒", "笑死", "耶", "嘿嘿")):
+        delta.update({"joy": 5, "excitement": 4, "sadness": -2, "anxiety": -1})
+        reason = "对方心情不错"
+    elif any(w in t for w in ("哭", "难过", "伤心", "委屈", "想哭", "睡不着", "低落", "难受")):
+        delta.update({"sadness": 7, "anxiety": 4, "joy": -3})
+        reason = "对方明显低落"
+    elif any(w in t for w in ("好烦", "气死", "烦死", "无语", "卧槽", "麻了", "烦躁")):
+        delta.update({"anxiety": 6, "joy": -2})
+        reason = "对方很烦"
+    elif any(w in t for w in ("好困", "累了", "累死", "困死", "没睡好")):
+        delta.update({"excitement": -5, "sadness": 1})
+        reason = "对方没精神"
+    if not delta:
+        return
+    _apply_emotion_delta(user_id, char_id, {
+        "emotion_delta": delta,
+        "emotion_reason": reason,
+    })
+
 def _mood_blocks_proactive(user_id: str, char_id: str) -> bool:
     """当天情绪基调为负面（或总情绪很低）→ 不适合主动找话题/分享日常。"""
     es = _emotion_state(user_id, char_id)
@@ -204,6 +234,7 @@ __all__ = [
     "_emotion_tone",
     "_mood_blocks_proactive",
     "_mood_is_great",
+    "_pre_reply_emotion_update",
     "_run_memory_pipeline",
     "_save_emotions",
     "_sync_character_to_letta",

@@ -10,13 +10,15 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from typing import Optional
 
 from loguru import logger
 
 from runtime.providers import AIProvider, ProviderKind, ProviderStatus
 
-_EMBED_MODEL = "BAAI/bge-small-zh-v1.5"
+# 允许用 QIYU_EMBED_MODEL 指向本地已缓存的模型目录，避免离线机器反复访问 huggingface。
+_EMBED_MODEL = os.getenv("QIYU_EMBED_MODEL", "BAAI/bge-small-zh-v1.5")
 
 
 class SentenceTransformersEmbeddingProvider(AIProvider):

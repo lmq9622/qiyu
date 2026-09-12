@@ -110,13 +110,23 @@ class UserPool:
     # ---------- 账号 ----------
 
     def register(self, username: str, password: str, nickname: str = "",
-                 role: str = "user") -> dict:
-        """注册账号。池为空时第一个账号自动成为管理员。"""
+                 role: str = "user", invite_code: Optional[str] = None) -> dict:
+        """注册账号。池为空时第一个账号自动成为管理员。
+
+        invite_code：
+        - None      → 跳过校验（管理员后台开户等内部路径）
+        - 非空字符串 → 必须与 QIYU_INVITE_CODE（默认 lmq9622）一致，否则报错
+        - 环境变量 QIYU_INVITE_CODE 设为空串 → 全站免邀请码
+        """
         username = (username or "").strip()
         if not _USERNAME_RE.match(username):
             raise ValueError("用户名需为 2~24 位字母/数字/下划线/中文")
         if not password or len(password) < 4:
             raise ValueError("密码至少 4 位")
+        if invite_code is not None:
+            expected = os.getenv("QIYU_INVITE_CODE", "lmq9622").strip()
+            if expected and (invite_code or "").strip() != expected:
+                raise ValueError("邀请码不正确，请向管理员确认后重试")
         with self._lock, self._connect() as conn:
             if conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
                 raise ValueError("用户名已被占用")
@@ -224,6 +234,39 @@ class UserPool:
     def revoke_all(self, user_id: int) -> None:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+
+    # ---------- 超管播种 ----------
+
+    def seed_admins(self, spec: Optional[str] = None) -> list:
+        """播种超管账号：spec 形如 'user:pass;user2:pass2'，缺省读 QIYU_ADMIN_ACCOUNTS（默认 lmq:lmq081015）。
+
+        账号不存在 → 直接以 admin 创建；已存在 → 只保证 role=admin、status=active，不改密码。
+        返回本次新创建的账号列表（供上层日志）。
+        """
+        spec = (spec or os.getenv("QIYU_ADMIN_ACCOUNTS", "lmq:lmq081015") or "").strip()
+        if not spec:
+            return []
+        created: list = []
+        for part in re.split(r"[;；,，]", spec):
+            part = part.strip()
+            if not part or ":" not in part:
+                continue
+            username, _, password = part.partition(":")
+            username, password = username.strip(), password.strip()
+            if not username or not password:
+                continue
+            existing = self.get_by_username(username)
+            if not existing:
+                try:
+                    created.append(self.register(username, password, role="admin"))
+                except ValueError as e:
+                    print(f"[用户池] 超管播种失败 {username}: {e}")
+            else:
+                if existing["role"] != "admin":
+                    self.set_role(existing["id"], "admin")
+                if existing["status"] != "active":
+                    self.set_status(existing["id"], "active")
+        return created
 
     # ---------- 统计 ----------
 

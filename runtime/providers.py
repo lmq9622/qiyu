@@ -116,7 +116,11 @@ class RealtimeDecision:
                  is_interruption: bool = False,
                  should_wait: bool = False,
                  reason: str = "",
-                 backend: str = ""):
+                 backend: str = "",
+                 model: str = "",
+                 confidence: float = 0.0,
+                 category: str = "",
+                 judge_source: str = ""):
         self.needs_main_brain = needs_main_brain
         self.quick_reply = quick_reply
         self.emotion = emotion
@@ -124,6 +128,10 @@ class RealtimeDecision:
         self.should_wait = should_wait
         self.reason = reason
         self.backend = backend
+        self.model = model
+        self.confidence = confidence
+        self.category = category
+        self.judge_source = judge_source
 
     def to_dict(self) -> dict:
         return {
@@ -134,6 +142,10 @@ class RealtimeDecision:
             "should_wait": self.should_wait,
             "reason": self.reason,
             "backend": self.backend,
+            "model": self.model,
+            "confidence": round(self.confidence, 3),
+            "category": self.category,
+            "judge_source": self.judge_source,
         }
 
 
@@ -153,6 +165,55 @@ class RealtimeBrainProvider(AIProvider):
 
     async def judge(self, user_text: str, context: Optional[dict] = None) -> RealtimeDecision:
         """对用户输入做一次实时判断。"""
+        raise NotImplementedError
+
+    async def quick_reply(self, user_text: str, *, max_tokens: int = 48,
+                          timeout_s: float = 6.0, char_hint: str = "") -> Optional[dict]:
+        """真实 Realtime Brain 直接回话：简单闲聊/情绪反应由本模型直接产出短回复。
+
+        返回 {"text", "backend", "model", "ttft_ms", "took_ms"} 或 None（不可用/超时/
+        输出不合格 → 调用方自动升级 Main Brain）。绝不抛异常阻塞聊天。
+        """
+        raise NotImplementedError
+
+    # ========== v0.0.26 统一运行接口 ==========
+    async def load(self, backend: str = "auto", **kwargs) -> dict:
+        """加载选中（或指定）的 Realtime Brain 后端。
+
+        返回统一结构：
+        {"ok", "backend", "model", "device", "load_ms", "ram_mb", "reason"}。
+        """
+        raise NotImplementedError
+
+    async def unload(self, backend: str = "auto") -> dict:
+        """卸载模型并释放内存；返回 {"ok", "freed_backends", "reason"}。"""
+        raise NotImplementedError
+
+    async def analyze(self, user_text: str, context: Optional[dict] = None) -> dict:
+        """统一实时判断：路由 + 置信度 + 可用即返回角色化 quick reply。
+
+        返回统一结构（业务层不再需要知道 official/gguf/vulkan/cuda）：
+        {
+          "needs_main_brain": bool,
+          "quick_reply": str|None,
+          "confidence": float,
+          "category": str,
+          "emotion": str|None,
+          "backend": str,
+          "model": str,
+          "judge_source": str,
+          "reason": str,
+          "meta": {...}   # 直答计时/质量信息（不可用时为空 dict）
+        }
+        """
+        raise NotImplementedError
+
+    async def benchmark(self) -> list[dict]:
+        """对当前所有真实可用后端做实测，返回排序后的统一结果列表。"""
+        raise NotImplementedError
+
+    def health(self) -> dict:
+        """当前 Realtime Brain 健康状态（同步、便宜；加载等重操作不在此发生）。"""
         raise NotImplementedError
 
 

@@ -39,6 +39,9 @@ class EmbeddingService:
             EmbeddingService._model = SentenceTransformer(
                 EMBEDDING_MODEL,
                 device=EMBEDDING_DEVICE,
+                # 离线机器（如 x99）无法访问 huggingface：只用本地缓存，不发 HEAD 请求，
+                # 否则每次加载会重试 5 次、每次 10s 超时，把聊天链路拖死。
+                local_files_only=True,
             )
             logger.success(f"Embedding 模型加载完成")
             logger.info(f"维度: {EMBEDDING_DIMENSION}")

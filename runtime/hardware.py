@@ -24,6 +24,13 @@ except Exception:  # pragma: no cover - 无 psutil 时降级为空探测
     psutil = None
 
 
+def _hidden_subprocess_kwargs() -> dict:
+    """windowed（PyInstaller --windowed）下禁止探测子进程弹出控制台窗口。"""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {}
+
+
 @dataclass
 class HardwareProfile:
     cpu_name: str = ""
@@ -84,10 +91,17 @@ class BackendCapability:
 class HardwareDetector:
     """设备探测（只读，无副作用；探测结果缓存）。"""
 
+    # 进程级共享探测结果：realtime/manager/API 各处会新建实例，
+    # 若各自缓存会导致每个实例都重跑 powershell/CIM 子进程并卡住主线程。
+    _shared_profile: Optional["HardwareProfile"] = None
+
     def __init__(self) -> None:
         self._profile: Optional[HardwareProfile] = None
 
     def detect(self) -> HardwareProfile:
+        if HardwareDetector._shared_profile is not None:
+            self._profile = HardwareDetector._shared_profile
+            return self._profile
         if self._profile is not None:
             return self._profile
         prof = HardwareProfile(os_name=platform.system(), platform=platform.platform())
@@ -103,6 +117,7 @@ class HardwareDetector:
         self._probe_cuda(prof)
         prof.vulkan_available = self._vulkan_available()
         self._profile = prof
+        HardwareDetector._shared_profile = prof
         logger.info(
             f"[硬件] CPU={prof.cpu_name} 核心={prof.cpu_cores} RAM={prof.ram_mb}MB "
             f"GPU={prof.gpu_name or '无'} ({prof.gpu_vendor}) VRAM={prof.vram_mb}MB "
@@ -117,6 +132,7 @@ class HardwareDetector:
                     ["powershell", "-NoProfile", "-Command",
                      "(Get-CimInstance Win32_Processor).Name"],
                     capture_output=True, text=True, timeout=10,
+                    **_hidden_subprocess_kwargs(),
                 )
                 name = (out.stdout or "").strip()
                 if name:
@@ -148,6 +164,7 @@ class HardwareDetector:
                     [smi, "--query-gpu=name,memory.total,driver_version",
                      "--format=csv,noheader,nounits"],
                     capture_output=True, text=True, timeout=15,
+                    **_hidden_subprocess_kwargs(),
                 )
                 line = (out.stdout or "").strip().splitlines()
                 if line:
@@ -167,6 +184,7 @@ class HardwareDetector:
                      "Get-CimInstance Win32_VideoController | "
                      "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"],
                     capture_output=True, text=True, timeout=15,
+                    **_hidden_subprocess_kwargs(),
                 )
                 data = (out.stdout or "").strip()
                 if data and data != "null":
@@ -226,9 +244,35 @@ class HardwareDetector:
                 out = subprocess.run(
                     [smi, "--query-gpu=compute_cap --format=csv,noheader,nounits"],
                     capture_output=True, text=True, timeout=15,
+                    **_hidden_subprocess_kwargs(),
                 )
                 cap = (out.stdout or "").strip()
-                prof.cuda_available = bool(cap)
+                # 验证CUDA可用性：需要有效的compute_cap且驱动版本>=450（CUDA 10+）
+                if cap:
+                    # 检查compute_cap格式是否有效（如 "7.5"）
+                    import re
+                    if re.match(r"^\d+\.\d+$", cap):
+                        # 尝试获取驱动版本进行更严格的验证
+                        try:
+                            out2 = subprocess.run(
+                                [smi, "--query-gpu=driver_version --format=csv,noheader,nounits"],
+                                capture_output=True, text=True, timeout=15,
+                                **_hidden_subprocess_kwargs(),
+                            )
+                            driver_ver = (out2.stdout or "").strip().splitlines()[0] if (out2.stdout or "").strip() else ""
+                            if driver_ver:
+                                # 主驱动版本 >= 450 通常支持CUDA 10+
+                                major = int(driver_ver.split(".")[0]) if driver_ver.split(".")[0].isdigit() else 0
+                                prof.cuda_available = major >= 450
+                            else:
+                                # 无法获取驱动版本，但有有效的compute_cap，保守认为可用
+                                prof.cuda_available = True
+                        except Exception:
+                            prof.cuda_available = True
+                    else:
+                        prof.cuda_available = False
+                else:
+                    prof.cuda_available = False
             except Exception:
                 prof.cuda_available = False
 
@@ -240,34 +284,52 @@ class HardwareDetector:
         return False
 
     def probe_backends(self) -> list[BackendCapability]:
-        """产出候选 Backend 能力矩阵（决定用哪个 backend，而不是写死）。"""
+        """产出候选 Backend 能力矩阵（决定用哪个 backend，而不是写死）。
+
+        真实性铁律：只有 llama.cpp 构建里真实注册了该 GPU 后端（ggml_probe
+        依据首次 backend_init 的 banner 判定）才把对应 cap 标为可用；
+        CUDA 还必须真实存在 NVIDIA GPU + CUDA 驱动。探测不到就不可用，
+        绝不因为 llama_supports_gpu_offload()==True 就误报 CUDA。
+        """
+        from runtime.ggml_probe import llama_gpu_kinds
         prof = self.detect()
         caps: list[BackendCapability] = []
-        # CUDA（仅 NVIDIA + 探测到 driver）
+        gpu_kinds = llama_gpu_kinds()
+        # CUDA（NVIDIA + 驱动 + llama.cpp 真实 CUDA 构建三者缺一不可）
         if prof.gpu_vendor == "NVIDIA" and prof.cuda_available:
-            caps.append(BackendCapability(
-                backend="cuda", device=prof.gpu_name, vendor="NVIDIA",
-                vram_mb=prof.vram_mb, text=True, vision=True, audio=False,
-                realtime_audio=False, available=True,
-            ))
-        # Vulkan（跨 NVIDIA/AMD/Intel；真实探测 llama.cpp Vulkan 后端是否可用）
+            if "cuda" in gpu_kinds:
+                caps.append(BackendCapability(
+                    backend="cuda", device=prof.gpu_name, vendor="NVIDIA",
+                    vram_mb=prof.vram_mb, text=True, vision=True, audio=False,
+                    realtime_audio=False, available=True,
+                ))
+            else:
+                caps.append(BackendCapability(
+                    backend="cuda", device=prof.gpu_name, vendor="NVIDIA",
+                    vram_mb=prof.vram_mb, text=True, vision=True, audio=False,
+                    realtime_audio=False, available=False,
+                    reason=("有 NVIDIA GPU/CUDA 驱动，但 llama.cpp 构建不含真实 CUDA 后端"
+                            "（需要安装带 CUDA 的 llama-cpp-python）"),
+                ))
+        # Vulkan（驱动 + llama.cpp 构建真实含 Vulkan 后端）
         if prof.vulkan_available:
-            vulkan_ok = False
-            vulkan_reason = "Vulkan 驱动存在，但 Vulkan 推理后端不可用（未安装带 Vulkan 的 llama-cpp-python）"
-            try:
-                import llama_cpp
-                if llama_cpp.llama_supports_gpu_offload() and llama_cpp.llama_max_devices() > 0:
-                    vulkan_ok = True
-                    vulkan_reason = ""
-            except Exception as _e:
-                vulkan_reason = f"Vulkan 推理后端不可用（{type(_e).__name__}）"
-            caps.append(BackendCapability(
-                backend="vulkan", device=prof.gpu_name or "vulkan-device",
-                vendor=prof.gpu_vendor, vram_mb=prof.vram_mb,
-                text=True, vision=True, audio=False, realtime_audio=False,
-                available=vulkan_ok,
-                reason=vulkan_reason,
-            ))
+            vulkan_ok = "vulkan" in gpu_kinds
+            if vulkan_ok:
+                caps.append(BackendCapability(
+                    backend="vulkan", device=prof.gpu_name or "vulkan-device",
+                    vendor=prof.gpu_vendor, vram_mb=prof.vram_mb,
+                    text=True, vision=True, audio=False, realtime_audio=False,
+                    available=True,
+                ))
+            else:
+                caps.append(BackendCapability(
+                    backend="vulkan", device=prof.gpu_name or "vulkan-device",
+                    vendor=prof.gpu_vendor, vram_mb=prof.vram_mb,
+                    text=True, vision=True, audio=False, realtime_audio=False,
+                    available=False,
+                    reason=("Vulkan 驱动存在，但 llama.cpp 构建不含真实 Vulkan 后端"
+                            "（需要安装带 Vulkan 的 llama-cpp-python）"),
+                ))
         # CPU：永远可用（Zero Setup 底线），文本能力可靠
         caps.append(BackendCapability(
             backend="cpu", device=prof.cpu_name or "cpu",

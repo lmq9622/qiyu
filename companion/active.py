@@ -12,6 +12,7 @@ from characters import get_character_manager
 from memory import get_memory_manager
 from channels import get_channel_registry
 from runtime.toolagent import tool_agent
+from runtime.gateway import message_gateway
 
 char_mgr = get_character_manager()
 mem_mgr = get_memory_manager()
@@ -22,7 +23,8 @@ llm_client = None
 from companion.state import _proactive_store, _schedules_store, user_states
 from companion.settings import _apply_thinking_kwargs, _route_llm_info, load_runtime_settings
 from companion.relations import _init_relation, _register_schedule, _save_proactive, _save_schedules
-from companion.conv import _check_unanswered, _context_gate, _conv_state, _event_similar_to_shared, _record_shared_event, _save_conv_store, _update_conv_state
+from companion.conv import (_check_unanswered, _context_gate, _conv_state, _event_similar_to_shared,
+                            _record_shared_event, _save_conv_store, _update_conv_state, flush_conv_store)
 from companion.behavior import _topic_similarity
 from companion.scheduler import proactive_scheduler
 
@@ -154,7 +156,16 @@ async def _fire_nudge(user_id: str, context: str, char_id: str = "", attempt: in
         logger.warning(f"[调度] {user_id} LLM 不可用，跳过追问")
         return
     try:
-        messages = await llm_client.generate_nudge(char_id, user_id, context, attempt=attempt, total=total)
+        async def _gen(texts, decision, dctx, brain_ctx):
+            return await llm_client.generate_nudge(char_id, user_id, context,
+                                                   attempt=attempt, total=total)
+        res = await _pipeline_active_content(
+            "nudge", user_id, char_id,
+            f"[追问] 用户上一轮可能没看到回复（上下文：{str(context)[:60]}），是否值得自然追问一句？",
+            {}, _gen)
+        messages = res.get("pieces") or []
+        if not messages:
+            return
         await _send_active_messages(user_id, messages, "闲聊", reason="nudge", char_id=char_id)
         logger.info(f"[追问] 用户 {user_id} 第{attempt + 1}/{total}次追问已发送")
     except Exception as e:
@@ -182,7 +193,15 @@ async def _fire_reminder(user_id: str, payload: dict):
         logger.warning(f"[调度] {user_id} LLM 不可用，跳过提醒")
         return
     try:
-        messages = await llm_client.generate_reminder(char_id, user_id, payload)
+        async def _gen(texts, decision, dctx, brain_ctx):
+            return await llm_client.generate_reminder(char_id, user_id, payload)
+        res = await _pipeline_active_content(
+            "reminder", user_id, char_id,
+            f"[提醒] 到点了（{str((payload or {}).get('text') or '')[:80]}），是否值得提醒一句？",
+            {}, _gen)
+        messages = res.get("pieces") or []
+        if not messages:
+            return
         await _send_active_messages(user_id, messages, "闲聊", reason="reminder", char_id=char_id)
         logger.info(f"[提醒] 用户 {user_id} 提醒已发送")
     except Exception as e:
@@ -206,7 +225,14 @@ async def _fire_proactive(user_id: str, night: bool = False, char_id: str = ""):
         if not allowed:
             logger.info(f"[主动消息] {user_id}/{char_id} Context Gate 拦截: {reason}")
             return
-        messages = await llm_client.generate_proactive(char_id, user_id, night=night)
+        async def _gen(texts, decision, dctx, brain_ctx):
+            return await llm_client.generate_proactive(char_id, user_id, night=night)
+        res = await _pipeline_active_content(
+            "proactive", user_id, char_id,
+            "[主动消息] 现在是否有自然话题值得发一句？结合最近聊天/关系/情绪判断，没话说就保持安静。",
+            {"topic": str((_conv_state(user_id, char_id).get("last_topic") or ""))[:60]},
+            _gen)
+        messages = res.get("pieces") or []
         if not messages:
             return  # 模型判断此刻没话可说
         reply_text = "".join(m.get("text", "") for m in messages).strip()
@@ -240,29 +266,24 @@ async def _fire_proactive(user_id: str, night: bool = False, char_id: str = ""):
 
 def _looks_like_search(user_input: str) -> bool:
     """用户是否明确要求联网查证/找东西（查/搜/找链接、视频、购物比价、热门等）。
-    作为模型忘输出 webcheck 时的兜底触发，避免"嘴上说查、后台没请求"。"""
+
+    作为模型忘输出 webcheck 时的兜底触发，避免"嘴上说查、后台没请求"。
+    规则统一收敛到 runtime/classifier.looks_like_search：
+    - 明确请求动词（帮我查/搜/找/看看…）才触发；
+    - "我刚才看到一个视频"这类过去式叙述不触发（避免误打扰）。
+    """
     if not user_input or not load_runtime_settings().get("web_enabled", True):
         return False
-    text = user_input.strip()
-    if len(text) < 2:
-        return False
-    hits = ("帮我查", "帮我搜", "给我搜", "给我查", "帮我找", "给我找", "帮我看看", "搜一下",
-            "查一下", "找一下", "查查", "搜搜", "查一查", "搜一搜",
-            "发个链接", "发链接", "发个视频", "发视频", "视频链接", "发我链接", "链接发我",
-            "多少钱", "哪个好", "比价", "对比一下", "官网", "最新消息", "今天有什么热门", "热门视频")
-    return any(w in text for w in hits)
+    from runtime.classifier import looks_like_search as _rt_search
+    return _rt_search(user_input)
 
 def _looks_like_image_request(user_input: str) -> bool:
     """用户是否明确要图/照片（发张图、看xxx长什么样、找张图、壁纸、表情包等）。
     作为模型忘输出 send_image 动作时的兜底触发：强制真实搜图，禁止"我拍个照"式空话。"""
     if not user_input or not load_runtime_settings().get("web_enabled", True):
         return False
-    text = user_input.strip()
-    if len(text) < 2:
-        return False
-    hits = ("发张图", "发图", "发张照片", "发照片", "发我张", "图片", "照片", "的图", "长什么样",
-            "给我看", "搜张", "找张", "来张", "表情包", "壁纸", "配图", "看图", "发过来", "给我发")
-    return any(w in text for w in hits)
+    from runtime.classifier import looks_like_image_request as _rt_img
+    return _rt_img(user_input)
 
 async def _subagent_plan_search(query: str) -> list:
     """带思考的搜索子代理：让路由模型判断是否需要真实联网搜索，并产出 1~2 个搜索关键词。
@@ -310,6 +331,75 @@ async def _subagent_plan_search(query: str) -> list:
 # M4：把搜索子代理注入 runtime.ToolAgent（规划与执行解耦，业务层只面对 Provider 接口）
 tool_agent.planner = _subagent_plan_search
 
+def _active_char_hint(char_id: str) -> str:
+    try:
+        ch = char_mgr.get_character(char_id) or char_mgr.get_default()
+        if not ch:
+            return ""
+        return f"{ch.name}，{ch.tagline or ''}".strip()[:80]
+    except Exception:
+        return ""
+
+def _active_role_context(user_id: str, char_id: str) -> str:
+    try:
+        rel = _init_relation(user_id, char_id)
+        tier = rel.get("tier") or "普通朋友"
+        aff = int(rel.get("affinity", 50) or 50)
+        pat = int((_conv_state(user_id, char_id).get("patience") or 0) or 60)
+        return f"【状态】你和对方现在是{tier}（好感{aff}/100，耐心{pat}/100）。"
+    except Exception:
+        return ""
+
+def _active_memory_hint(user_id: str, char_id: str, trigger: str, limit: int = 2) -> str:
+    try:
+        ctx = mem_mgr.get_context(user_id, trigger, char_id) or ""
+        lines = [l for l in ctx.splitlines() if l.strip()][:limit]
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+def _messages_to_pieces(msgs: list) -> list:
+    out = []
+    for m in msgs or []:
+        if not isinstance(m, dict):
+            continue
+        p = {"text": m.get("text", ""), "type": m.get("type", "statement"),
+             "delay": m.get("delay", 0)}
+        if m.get("image_url"):
+            p["image_url"] = m.get("image_url")
+        out.append(p)
+    return out
+
+async def _pipeline_active_content(kind: str, user_id: str, char_id: str,
+                                   trigger: str, context: dict,
+                                   main_gen) -> dict:
+    """P1：主动类入口先经 MiniMind → BrainDecision，再由 MainBrain 产出正文。"""
+    ctx = dict(context or {})
+    ctx.setdefault("user_id", user_id)
+    ctx.setdefault("char_id", char_id)
+    ctx.setdefault("char_hint", _active_char_hint(char_id))
+    ctx.setdefault("role_context", _active_role_context(user_id, char_id))
+    ctx.setdefault("emotion_state", {})
+    ctx.setdefault("memory_hint", _active_memory_hint(user_id, char_id, trigger))
+    ctx.setdefault("web_enabled", bool(load_runtime_settings().get("web_enabled", True)))
+    ctx.setdefault("max_tokens", 16)
+    ctx.setdefault("timeout_s", 8.0)
+    try:
+        from companion.emotions import _emotion_state
+        ctx["emotion_state"] = _emotion_state(user_id, char_id) or {}
+    except Exception:
+        pass
+
+    async def _main(texts, decision, dctx, brain_ctx):
+        msgs = await main_gen(texts, decision, dctx, brain_ctx)
+        if isinstance(msgs, list):
+            pieces = _messages_to_pieces(msgs)
+            return {"text": "".join(p.get("text", "") for p in pieces), "pieces": pieces}
+        return msgs
+
+    message_gateway.pipeline.set_main_brain(_main)
+    return await message_gateway.handle_active(kind, user_id, char_id, [trigger], ctx)
+
 async def _fire_webcheck(user_id: str, payload: dict):
     """联网查证：带思考的子代理规划关键词 → 真实联网检索 → 让模型基于真实结果补一条回复"""
     st = user_states.get(user_id)
@@ -337,11 +427,16 @@ async def _fire_webcheck(user_id: str, payload: dict):
         _last_u = float(_cs.get("last_user_at") or 0)
         _cur_topic = (_cs.get("last_topic") or "").strip()
         _stale = bool(_sched_at and _last_u and _last_u > _sched_at + 10 and _cur_topic)
-        evidence = await _task_agent_search(user_id, char_id, query)
-        msgs = await llm_client.generate_webcheck_reply(char_id, user_id, query, evidence.get("items") or [],
-                                                        auto=bool((payload or {}).get("auto")),
-                                                        success=bool(evidence.get("success")),
-                                                        stale=_stale, current_topic=_cur_topic)
+        async def _gen(texts, decision, dctx, brain_ctx):
+            ev = dctx.get("_tool_evidence") or {"success": False, "items": []}
+            return await llm_client.generate_webcheck_reply(
+                char_id, user_id, query, ev.get("items") or [],
+                auto=bool((payload or {}).get("auto")),
+                success=bool(ev.get("success")), stale=_stale, current_topic=_cur_topic)
+        res = await _pipeline_active_content(
+            "webcheck", user_id, char_id, query,
+            {"topic": _cur_topic}, _gen)
+        msgs = res.get("pieces") or []
         if not msgs:
             return
         reply_text = "".join(m.get("text", "") for m in msgs).strip()
@@ -350,7 +445,9 @@ async def _fire_webcheck(user_id: str, payload: dict):
         if re.search(r"https?://", reply_text):
             cs = _conv_state(user_id, char_id)
             _record_shared_event(user_id, char_id, f"webcheck_{int(time.time())}", reply_text[:200], cs.get("last_topic", ""))
-        logger.info(f"[联网] {user_id} 查证回复已发送: {query[:40]} success={bool(evidence.get('success'))}")
+        tev = res.get("tool_evidence") or {}
+        success = bool(tev.get("success"))
+        logger.info(f"[联网] {user_id} 查证回复已发送: {query[:40]} success={success}")
     except Exception as e:
         logger.warning(f"[联网] 查证回复失败: {e}")
 
@@ -381,15 +478,23 @@ async def _fire_imagecheck(user_id: str, payload: dict):
         _last_u = float(_cs.get("last_user_at") or 0)
         _cur_topic = (_cs.get("last_topic") or "").strip()
         _stale = bool(_sched_at and _last_u and _last_u > _sched_at + 10 and _cur_topic)
-        images = await _task_agent_search_images(user_id, char_id, query)
-        msgs = await llm_client.generate_webcheck_reply(char_id, user_id, query, images,
-                                                        auto=False, success=bool(images), images=images,
-                                                        stale=_stale, current_topic=_cur_topic)
+        async def _gen(texts, decision, dctx, brain_ctx):
+            ev = dctx.get("_tool_evidence") or {"success": False, "items": []}
+            images = ev.get("items") or []
+            return await llm_client.generate_webcheck_reply(
+                char_id, user_id, query, images, auto=False,
+                success=bool(ev.get("success")), images=images,
+                stale=_stale, current_topic=_cur_topic)
+        res = await _pipeline_active_content(
+            "imagecheck", user_id, char_id, query,
+            {"topic": _cur_topic}, _gen)
+        msgs = res.get("pieces") or []
         if not msgs:
             return
         reply_text = "".join(m.get("text", "") for m in msgs).strip()
         await _send_active_messages(user_id, msgs, "闲聊", reason="imagecheck", char_id=char_id)
-        logger.info(f"[找图] {user_id} 图片回复已发送: {query[:40]} found={len(images)}")
+        ev = res.get("tool_evidence") or {}
+        logger.info(f"[找图] {user_id} 图片回复已发送: {query[:40]} found={len(ev.get('items') or [])}")
     except Exception as e:
         logger.warning(f"[找图] 图片回复失败: {e}")
 
@@ -461,7 +566,15 @@ async def _fire_story_check(user_id: str, payload: dict):
         # 用户在排队期间已经回消息 / 故事状态已结束 → 不发
         if last_user > sched_at or not cs.get("story_active"):
             return
-        messages = await llm_client.generate_story_check(char_id, user_id, (payload or {}).get("context", ""))
+        story_ctx = str((payload or {}).get("context") or "")[:80]
+        async def _gen(texts, decision, dctx, brain_ctx):
+            return await llm_client.generate_story_check(char_id, user_id, story_ctx)
+        res = await _pipeline_active_content(
+            "story_check", user_id, char_id,
+            f"[storycheck] 讲故事/长内容后对方很久没回（最近话题：{story_ctx or '无'}）。该不该自然轻唤一句？",
+            {"topic": story_ctx, "topic_transition": "no_context"},
+            _gen)
+        messages = res.get("pieces") or []
         if not messages:
             return
         await _send_active_messages(user_id, messages, "闲聊", reason="story_check", char_id=char_id)
@@ -487,7 +600,7 @@ async def _maybe_daily_proactive_for_char(user_id: str, char_id: str):
     decision = proactive_scheduler.evaluate(user_id, char_id)
     if not decision.allowed:
         if decision.reason == "context_gate":
-            _update_conv_state(user_id, char_id, "idle")
+            _update_conv_state(user_id, char_id, "idle", save=False)
         return
     # 生成前先登记时间（进入冷却），避免失败后立刻重试
     proactive_scheduler.record_attempt(user_id, char_id)
@@ -667,16 +780,14 @@ async def _background_loop():
     _tool_task_refs = set()
 
     async def _run_limited(coro):
-        # 联网/找图任务耗时较长（子代理规划 + 真实搜索 + 补回复），
-        # 不能阻塞背景循环逐条串行执行，否则多用户排队时回复延迟会被拉爆。
-        # 联网类走 GlobalConcurrencyLimiter(tool) 子闸，避免真实搜索风暴；
-        # LLM 调用由 llm_limiter（同总闸）兜底。
-        from runtime.concurrency import concurrency_limiter
-        async with concurrency_limiter.slot("tool"):
-            try:
-                await coro
-            except Exception:
-                pass
+        # 注意：这里不能再整段持有 tool 子闸。联网任务的真实搜索由
+        # ToolAgent.search() 自己限流；而补回复还要等 llm/global 总闸。
+        # 若外层先占 tool、内层再等 global，会与“已占 global、正等 tool”
+        # 的聊天请求形成 AB-BA 死锁（实测 tool 长期 inflight=1、全链路卡死）。
+        try:
+            await coro
+        except Exception:
+            pass
 
     def _spawn_tool_task(coro, limited=False):
         if limited:
@@ -724,7 +835,7 @@ async def _background_loop():
                         _spawn_tool_task(_fire_story_check(uid, task.get("payload") or {}), limited=True)
                 # 会话状态机 idle 扫描 + 主动消息没被回 → 记失落（按角色独立）
                 for _cid in [c for u, c in mem_mgr.get_user_char_pairs() if u == uid]:
-                    _update_conv_state(uid, _cid, "idle")
+                    _update_conv_state(uid, _cid, "idle", save=False)
                     _check_unanswered(uid, _cid, now)
                     # 讲故事后听众长时间没回 → 排一次轻唤（喂？/睡着了？）
                     try:
@@ -740,6 +851,8 @@ async def _background_loop():
                 await _maybe_daily_proactive(uid, today)
             # 每日聊天大纲：凌晨4点后补生成前一天（含次日打开补生成）；每天执行一次扫描即可
             await _maybe_daily_outline_pass(today)
+            # 后台扫描期间的状态转移全部合并为一次落盘，避免每个角色全量写 conv_state.json
+            flush_conv_store()
         except Exception as e:
             logger.error(f"[后台调度] 出错: {e}")
 

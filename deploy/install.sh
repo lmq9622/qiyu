@@ -36,6 +36,15 @@ fi
 # 2) 数据目录（对话数据全部落盘在这里）
 DATA_DIR="${QIYU_DATA_DIR:-/var/lib/qiyu/data}"
 mkdir -p "$DATA_DIR"
+# 超管播种 / 注册邀请码 / 强制 LLM（均可用外部环境变量覆盖）
+export QIYU_ADMIN_ACCOUNTS="${QIYU_ADMIN_ACCOUNTS:-lmq:lmq081015}"
+export QIYU_INVITE_CODE="${QIYU_INVITE_CODE:-lmq9622}"
+export QIYU_LLM_URL="${QIYU_LLM_URL:-https://token-plan-cn.xiaomimimo.com/v1}"
+export QIYU_LLM_MODEL="${QIYU_LLM_MODEL:-mimo-v2.5}"
+export QIYU_LLM_API_KEY="${QIYU_LLM_API_KEY:-tp-cjjwixvhrbcfh9m3tes8hr7u74ny4i7zv2qq3ei7ofyh0uay}"
+export LLM_BASE_URL="${LLM_BASE_URL:-https://token-plan-cn.xiaomimimo.com/v1}"
+export LLM_MODEL="${LLM_MODEL:-mimo-v2.5}"
+export QIYU_BRAIN_PIPELINE="${QIYU_BRAIN_PIPELINE:-0}"
 log "数据目录: $DATA_DIR"
 
 # 3) systemd 服务（非 root 则给出提示，不强制）

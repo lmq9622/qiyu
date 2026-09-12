@@ -254,7 +254,9 @@ LLM_PRESETS = [
      "key_hint": "在 https://platform.moonshot.cn 获取 API Key"},
     {"id": "xiaomimimo", "name": "小米 MiMo", "base_url": "https://api.xiaomimimo.com/v1",
      "models": ["mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"],
-     "key_hint": "在 https://platform.xiaomimimo.com 获取 API Key"},
+     "key_hint": "在 https://platform.xiaomimimo.com 获取 API Key",
+     "extra_fields": [{"name": "token_plan", "label": "Token Plan（选填）",
+                       "type": "text", "placeholder": "例如 x1 / balance，按你的账号套餐填"}]},
 ]
 
 _USER_NET_TTL = 6 * 3600

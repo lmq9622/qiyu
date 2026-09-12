@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Qiyu LLM 客户端（Main Brain 适配层，从 demo.py 迁移，M1）。"""
 import json
+import os
 import re
 import time
 import asyncio
@@ -76,7 +77,8 @@ class LLMClient(MainBrainProvider):
     
     async def _build_chat_system_msg(self, char_id: str, messages: list,
                                      user_id: str = "", use_memory: bool = True, use_rag: bool = True,
-                                     channel=None, pending_messages: list | None = None) -> str:
+                                     channel=None, pending_messages: list | None = None,
+                                     brain_context: str = "") -> str:
         """构建聊天系统提示词（人设平级约束 + 角色卡 + 记忆 + 开关），chat 与 chat_stream 共用"""
         # 提取用户输入
         user_input = ""
@@ -193,6 +195,14 @@ class LLMClient(MainBrainProvider):
             elif _shift_kind in ("natural", "contextual"):
                 # 自然换题/有关联地换题：不注入任何反应指令（避免"话题意识"痕迹）
                 pass
+            elif _shift_kind == "repeat_recent":
+                system_parts.append(
+                    f"\n【对方把刚聊过的事又问了一遍（内部判断，不是记忆检索任务）】"
+                    f"对方刚才已经聊过/你刚回答过：{_prev_topic or '这件事'}。"
+                    f"你可以先像真人一样疑惑/吐槽一句（『？』『你咋又问』『刚不是说过了吗』），"
+                    f"再自然接住；不要进入长篇回忆，不要说『我回忆了一下』『根据之前的对话』。"
+                    f"反应强度由情绪/耐心/关系决定：很熟可以怼，刚认识可以只正常答一次。"
+                )
 
         # 注入"主动消息没被回"的小情绪（内部状态，按角色独立；只在气氛合适时自然带出，不要复述本框）
         unans = _conv_state(user_id, char_id).get("unanswered_pending") if (user_id and char_id) else None
@@ -312,8 +322,15 @@ class LLMClient(MainBrainProvider):
             if knowledge_ctx:
                 system_parts.append(f"\n{knowledge_ctx}")
 
+        # BrainPipeline：MainBrain 接收 MiniMind 压缩理解，不从零理解
+        if brain_context:
+            system_parts.append(f"\n{brain_context}")
+
         # 查证铁律：用户要求查/找/搜/比价/最新信息时，本轮禁止编造任何具体事实/价格/结论
-        if load_runtime_settings().get("web_enabled", True) and user_input and (route_result.needs_web or _looks_like_search(user_input)):
+        _tool_evidence_injected = bool(brain_context and "ToolAgent 真实结果" in brain_context)
+        if (load_runtime_settings().get("web_enabled", True) and user_input
+                and (route_result.needs_web or _looks_like_search(user_input))
+                and not _tool_evidence_injected):
             system_parts.append(
                 "【查证铁律（本次必须遵守）】对方要求查/找/搜/比价/看最新信息/找图时，"
                 "除非本轮的【联网检索结果】已经注入到上下文，否则这一轮 messages 里："
@@ -325,8 +342,11 @@ class LLMClient(MainBrainProvider):
                 "如果人设让你懒得查，也可以像真人一样直接拒绝（懒死了自己查），但绝不允许编造结果。"
             )
 
-        # 联网：解析用户发来的链接 / 明确的查证诉求（web_enabled 关闭时跳过）
-        if load_runtime_settings().get("web_enabled", True) and route_result.needs_web and user_input:
+        # P1：主链路启用 Pipeline 时 MainBrain 不自己调 web_tools（ToolAgent 已先行执行）；
+        # 旧链路（QIYU_BRAIN_PIPELINE=0 的显式回退）保留原行为，避免直接删功能。
+        _pipeline_mode = os.getenv("QIYU_BRAIN_PIPELINE", "1") != "0"
+        if (not _pipeline_mode and load_runtime_settings().get("web_enabled", True)
+                and route_result.needs_web and user_input):
             try:
                 urls = re.findall(r"https?://[^\s，。、]+", user_input)
                 if urls:
@@ -396,11 +416,14 @@ class LLMClient(MainBrainProvider):
 
     async def chat(self, char_id: str, messages: list, temperature: float = 0.7,
                    user_id: str = "", use_memory: bool = True, use_rag: bool = True,
-                   channel=None, pending_messages: list | None = None) -> str:
+                   channel=None, pending_messages: list | None = None,
+                   brain_context: str = "") -> str:
         """生成回复，自动注入记忆和知识；pending_messages=§15 连续多条用户消息批次。"""
         if not self.available:
             raise HTTPException(503, "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称。")
-        system_msg = await self._build_chat_system_msg(char_id, messages, user_id, use_memory, use_rag, channel, pending_messages)
+        system_msg = await self._build_chat_system_msg(
+            char_id, messages, user_id, use_memory, use_rag, channel, pending_messages,
+            brain_context=brain_context)
         from runtime.perf import perf_monitor
         with perf_monitor.time("llm_ttft", char=char_id):
             raw = await self._call_real_llm(system_msg, messages, temperature)
@@ -427,11 +450,14 @@ class LLMClient(MainBrainProvider):
 
     async def chat_stream(self, char_id: str, messages: list, temperature: float = 0.7,
                           user_id: str = "", use_memory: bool = True, use_rag: bool = True,
-                          channel=None, pending_messages: list | None = None):
+                          channel=None, pending_messages: list | None = None,
+                          brain_context: str = ""):
         """流式生成回复：yield (reasoning_delta, content_delta)；pending_messages=§15 批次。"""
         if not self.available:
             raise HTTPException(503, "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称。")
-        system_msg = await self._build_chat_system_msg(char_id, messages, user_id, use_memory, use_rag, channel, pending_messages)
+        system_msg = await self._build_chat_system_msg(
+            char_id, messages, user_id, use_memory, use_rag, channel, pending_messages,
+            brain_context=brain_context)
         async for reasoning, content in self._call_real_llm_stream(system_msg, messages, temperature):
             yield reasoning, content
 
@@ -439,6 +465,19 @@ class LLMClient(MainBrainProvider):
         """记忆流水线用：无上下文的独立 LLM 调用（压缩/提事实）"""
         system_msg = "你是后台记忆整理器，只输出整理结果本身，不解释、不客套。"
         return await self._call_real_llm(system_msg, [{"role": "user", "content": prompt}], 0.3)
+
+    async def complete_json(self, system_prompt: str, user_prompt: str,
+                            temperature: float = 0.2) -> str:
+        """Quest MR 等结构化规划用：独立、不注入记忆/RAG 的原始 LLM 调用。
+
+        与 summarize_text 一样只复用现有 LLM 通道，不创建新 Agent 系统；
+        调用方负责校验 JSON schema。
+        """
+        if not self.available:
+            raise HTTPException(503, "LLM 服务未配置或不可用，请检查设置中的 API 地址和模型名称。")
+        return await self._call_real_llm(
+            system_prompt, [{"role": "user", "content": user_prompt}], temperature)
+
     async def generate_nudge(self, char_id: str, user_id: str, context: str = "", attempt: int = 0, total: int = 1) -> list:
         """提问/给建议后几分钟没回复：按追问梯次（attempt/total）生成自然的真人追问（JSON 消息列表）。
         第 1 次先轻轻问一句（可以是『？』『人呢』）；后面才逐步加急/调侃。"""
@@ -750,6 +789,9 @@ class LLMClient(MainBrainProvider):
         url = (url or LLM_URL).rstrip("/")
         model = model or LLM_MODEL
         headers = {"Content-Type": "application/json"}
+        if not api_key:
+            # 兜底：调用方未传 api_key 时从运行时设置读取（桌面/服务器版共用，服务器分支把强制 Key 钉进 settings）
+            api_key = load_runtime_settings().get("api_key", "") or ""
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = {
@@ -758,12 +800,20 @@ class LLMClient(MainBrainProvider):
             "temperature": temperature,
             "max_tokens": 6000,
         }
+        try:
+            from companion.settings import load_runtime_settings
+            _extra = load_runtime_settings().get("llm_extra") or {}
+            for _k, _v in (_extra or {}).items():
+                if _v not in (None, ""):
+                    payload[_k] = _v
+        except Exception:
+            pass
         if no_thinking:
             payload.pop("chat_template_kwargs", None)
         else:
             _apply_thinking_kwargs(payload)
         
-        async with httpx.AsyncClient(timeout=180) as client:
+        async with httpx.AsyncClient(timeout=int(os.getenv("QIYU_LLM_TIMEOUT", "180"))) as client:
             resp = await client.post(f"{url}/chat/completions", json=payload, headers=headers)
             if resp.status_code == 400 and "chat_template_kwargs" in payload:
                 payload.pop("chat_template_kwargs", None)
@@ -797,6 +847,9 @@ class LLMClient(MainBrainProvider):
         url = (url or LLM_URL).rstrip("/")
         model = model or LLM_MODEL
         headers = {"Content-Type": "application/json"}
+        if not api_key:
+            # 兜底：调用方未传 api_key 时从运行时设置读取（桌面/服务器版共用，服务器分支把强制 Key 钉进 settings）
+            api_key = load_runtime_settings().get("api_key", "") or ""
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         payload = {
@@ -806,9 +859,17 @@ class LLMClient(MainBrainProvider):
             "max_tokens": 6000,
             "stream": True,
         }
+        try:
+            from companion.settings import load_runtime_settings
+            _extra = load_runtime_settings().get("llm_extra") or {}
+            for _k, _v in (_extra or {}).items():
+                if _v not in (None, ""):
+                    payload[_k] = _v
+        except Exception:
+            pass
         _apply_thinking_kwargs(payload)
         thinking_on = bool((payload.get("chat_template_kwargs") or {}).get("enable_thinking") in (True, "true", "True", 1))
-        async with httpx.AsyncClient(timeout=420) as client:
+        async with httpx.AsyncClient(timeout=int(os.getenv("QIYU_LLM_TIMEOUT", "420"))) as client:
             for _attempt in range(3):
                 try:
                     seen_reasoning = ""

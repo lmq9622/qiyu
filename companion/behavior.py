@@ -443,9 +443,34 @@ def _refresh_unfinished_topic(user_id: str, char_id: str, user_input: str):
 def _classify_topic_shift(user_id: str, char_id: str, user_input: str) -> tuple:
     """把"话题变化"分成 none / natural / contextual / abrupt。
     只有 abrupt 才可能产生"你怎么突然说这个"的反应；natural/contextual 正常接住、不演惊讶。
-    返回 (kind, prev_topic)。"""
+    返回 (kind, prev_topic)。kind 额外支持 repeat_recent：刚聊完立刻又问同一件事。"""
     if not user_input or not user_id or not char_id:
         return "none", ""
+    # 重复刚问过的话题（当前输入写入历史后，历史最后一条用户消息=当前）
+    try:
+        hist = mem_mgr.get_recent_history(user_id, limit=8, char_id=char_id)
+        prev_user = ""
+        prev_user_ts = 0.0
+        seen = False
+        import datetime as _dt
+        for m in reversed(hist or []):
+            if m.get("role") != "user":
+                continue
+            if not seen:
+                seen = True
+                continue
+            prev_user = str(m.get("content") or "").strip()
+            try:
+                prev_user_ts = _dt.fromisoformat(str(m.get("timestamp") or "")[:19]).timestamp()
+            except Exception:
+                pass
+            break
+        if prev_user and prev_user != user_input:
+            sim = _topic_similarity(prev_user, user_input)
+            if sim >= 0.55 and prev_user_ts and 0 < time.time() - prev_user_ts <= 3600:
+                return "repeat_recent", prev_user[:80]
+    except Exception:
+        pass
     st = user_states.get(user_id) or {}
     prev_topic = ((st.get("last_topic") or "").strip() or (cs_topic := _conv_state(user_id, char_id).get("last_topic") or "")[:60])
     sim = _topic_similarity(prev_topic, user_input) if prev_topic else 1.0

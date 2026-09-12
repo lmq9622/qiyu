@@ -409,6 +409,8 @@ class MemoryManager:
         self._stores: Dict[str, VectorStore] = {}
         self._chat_histories: Dict[str, List[dict]] = {}  # user_id -> messages
         self._day_logs: Dict[str, List[dict]] = {}  # "hkey|date" -> messages（按天快照，供每日大纲使用）
+        self._pairs_cache: Optional[List[tuple]] = None   # (user,char) 扫描缓存：后台循环高频全量 glob 会饿死主循环
+        self._pairs_cache_at: float = 0.0
         self._summary_interval = 10  # 每10轮对话生成摘要
         self._pipeline_lock = threading.RLock()  # 记忆流水线专用锁，避免并发重复压缩
         self._lock = threading.RLock()
@@ -781,6 +783,8 @@ class MemoryManager:
 
     def get_user_char_pairs(self) -> List[tuple]:
         """返回全部出现过聊天的 (user_id, char_id) 对，供后台调度按角色独立触发（不依赖当前前台角色）"""
+        if self._pairs_cache is not None and time.time() - self._pairs_cache_at < 30:
+            return self._pairs_cache
         pairs = set()
 
         def add_from(hk: str):
@@ -799,7 +803,9 @@ class MemoryManager:
                 stem = p.stem
                 hk = stem.rsplit(sep, 1)[0] if sep else stem
                 add_from(hk)
-        return sorted(pairs)
+        self._pairs_cache = sorted(pairs)
+        self._pairs_cache_at = time.time()
+        return self._pairs_cache
     
     def add_message(self, user_id: str, role: str, content: str, character_id: str = "", pieces: list = None, images: list = None):
         """添加对话消息。pieces 可选：AI 多消息回复的分条内容 [{text,type,delay}]，
@@ -819,6 +825,7 @@ class MemoryManager:
             hk = self._hkey(user_id, character_id)
             if hk not in self._chat_histories:
                 self._chat_histories[hk] = []
+                self._pairs_cache = None  # 新用户/角色对出现后让后台调度尽快看到
             self._chat_histories[hk].append(record)
             self._persist_history(hk)
             # 按天快照：每天一个文件，供凌晨4点生成"前一天聊天大纲"，不受历史裁剪影响

@@ -28,6 +28,8 @@ from characters import get_character_manager, Character
 from gateway.router import get_router, IntentType, RouteResult
 from config import get_config
 from rag.tags import get_tag_manager, MemoryTagManager
+from gateway.call_signaling import router as call_signaling_router
+from gateway.omni_ws import router as omni_ws_router
 
 # ============ 配置 ============
 GATEWAY_HOST = os.getenv("GATEWAY_HOST", "0.0.0.0")
@@ -219,6 +221,11 @@ app.add_middleware(
 # 静态文件服务（角色选择页面）
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# 视频通话信令（WebRTC 媒体面；只传信令，不传媒体）
+app.include_router(call_signaling_router)
+# Realtime Omni 统一协议（认知面；会话/输入/输出/控制四类事件）
+app.include_router(omni_ws_router)
 
 letta: Optional[LettaClient] = None
 char_mgr = get_character_manager()

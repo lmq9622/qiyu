@@ -1,7 +1,13 @@
 # 栖语demo · 项目日志（PROJECT LOG）
 
 > 生成日期：2026-08-31
-> 版本规则：**每重新打包一次，版本号顺延 +0.0.1**（打包 = 交付 = 版本）
+> 版本规则（**2026-09-11 重编，见 `docs/VERSION_SCHEME.md`**）：
+> - `0.0.x` 历史 demo 线（v0.0.3 ~ v0.0.24），保留原编号；
+> - `0.05.x` **MiniMind-O 小脑专线（已废案）**，`0.05.0` → `0.05.24` 共 25 次迭代；
+> - `0.1.x` 产品主线（本机 Realtime Omni），`0.1.0` 重新起算。
+>
+> 旧的「0.1.0」整包（MiniMind-O MoE 首轮反应模型）已改记为 **`0.05.24`**，
+> 归档见 `docs/MINIMIND_O_ARCHIVE.md`，交付包见 `../legacy/MiniMind-O-0.05.24/`。
 > 本文档记录从接手（初期编号 **0.0.3**）到当前版本的每一次更新内容、功能清单与测试结果。
 
 ---
@@ -615,6 +621,21 @@
 
 目标架构：Qiyu App → Qiyu Runtime → Companion Runtime（Realtime Brain + Main Brain + Memory + Emotion/Relation + Tool/Agent + Voice/Vision/Avatar + Scheduler）。行为归代码管（状态机/调度/上下文），台词归模型管；禁止巨型 System Prompt 万能论；禁止把 Vulkan/CUDA 写死；禁止要求用户装开发环境。
 
+> **2026-09-11 版本重编**：M0–M7 属重编前的架构迁移（对应 `0.0.x` 尾段）；
+> **M8 起的 MiniMind-O / 小脑相关记录统一标注为 `0.05.x` 小脑专线（已废案）**，
+> 对应关系见下表；M18（Quest MR）/ M18b（OOD / Human Motion）与 MiniMind 无关，不属该线。
+>
+> | 0.05.x | M 节点 | 0.05.x | M 节点 | 0.05.x | M 节点 |
+> |---|---|---|---|---|---|
+> | 0.05.0 | M8 | 0.05.9 | M13d | 0.05.19 | M16 |
+> | 0.05.1–0.05.5 | exp1 / exp-gpu / exp-gpu2 / exp-general / exp-persona | 0.05.10–0.05.12 | M14 Stage A–D | 0.05.20 | M17 |
+> | 0.05.5+ | M12 | 0.05.13–0.05.15 | D2 / D3 / D4 | 0.05.21 | M18 Stage 1 |
+> | 0.05.6 | M13 | 0.05.16 | M15 / M15 P0 | 0.05.22 / 0.05.22+ | M19 / M20 |
+> | 0.05.7 | M13b | — | — | 0.05.23 | M21 |
+> | 0.05.8 | M13c | — | — | 0.05.24 | M22 + M23（线终版） |
+>
+> 完整归档（训练过程 + 大小脑标签选调记录）见 `docs/MINIMIND_O_ARCHIVE.md`。
+
 ### M0 已基线（commit e519f05）
 - `git init` + 首个基线提交；`data/` 运行时数据与角色文件重置（用户明确不留用户数据）。
 - 环境验证：Python 3.13.7、远端 LLM（192.168.2.6:8081）可达。
@@ -675,7 +696,7 @@
 - **模型根目录修复**：runtime/get_models_dir() 统一 dev=仓库根 models/、exe=可执行文件旁 sidecar models/；tools/install_models.py 默认 GGUF 链接更新为真实文件名（旧链接 404），并新增 --asr 下载 STT 模型。
 - **验证**：python -m compileall 全绿；隔离启动冒烟：realtime_brain/vision/stt/tts 全部 available，vrc/telegram/discord 无配置时诚实 unavailable 且原因明确；行为回归 s501-s526 26/26、工具类 s081-s090 10/10 全过。
 
-### M8 MiniMind-O 真正运行 + Backend 自动选择 + MicroBenchmark（本次，规格§4/§6/§11/§13/§54）
+### [0.05.0] M8 MiniMind-O 真正运行 + Backend 自动选择 + MicroBenchmark（本次，规格§4/§6/§11/§13/§54）
 - **官方格式查证（不凭空假设）**：`jingyaogong/minimind-o` 官方权重为 PyTorch/transformers（pytorch_model.bin，`minimind-3o` 115M / `-moe` 312M-A115M），无官方 GGUF/ONNX；官方仓库默认分支 master，CPU 即可推理。HF 本机不可达，ModelScope 可达（`gongjy/minimind-3o` 含远程代码 model_omni.py / model_minimind.py），hf-mirror 作兜底。
 - **真实推理后端**：新 `runtime/minimindo/`——`MiniMindOOmniRuntime`（模型自动发现 `models/realtime/` + 下载、加载锁、CPU/CUDA 自动选择、`generate_text()`、内置 MicroBenchmark）+ `model_minimind.py`（官方 verbatim + 来源头）+ `model_omni.py`（官方代码裁剪：去 soundfile/librosa/onnxruntime/numpy 依赖，去 VAD/RealtimeSession，保留文本生成路径，文本推理不需 SenseVoice/SigLIP2/Mimi）。transformers 5.5 动态加载因 funasr/librosa 检查失败 → 用裁剪版，零额外依赖、跨平台最稳。
 - **Backend 自动选择**：`runtime/realtime.py` 新增 `MiniMindOOmniBackend`（id=minimindo-omni）；`build_realtime_backend` 优先级改为官方权重 → GGUF 备选（thinker.gguf 保留）；统一 `_judge_prompt` / `_parse_decision`；probe 不加载模型（防事件循环阻塞与并发损坏）。
@@ -684,10 +705,699 @@
 - **模型安装器**：`tools/install_models.py` 新增 `--omni [--moe]`（ModelScope 下载 `gongjy/minimind-3o` 到 `models/realtime/minimind-3o/`），check/detect/recommend 同步更新；`.gitignore` 忽略权重文件；`models/README.md` 更新说明。
 - **验证**：真实加载 113.1M 参数 CPU 推理 TTFT 44–146ms / tok/s 20–28；RuntimeManager 集成 provider=minimindo-omni、backend=cpu、measured=True；完整服务隔离启动（QIYU_PORT=8773 + 隔离 QIYU_DATA_DIR）端点冒烟全绿，judge 不可解析时如实回退 Main Brain 并在 reason 附模型原文（不假装实时处理）；`python -m compileall` 全绿。
 
-### M9 P0.5 收尾：并发限流 / 批量待发队列 / Thinking 分离 / 工具硬护栏 / 讲故事轻唤（本次）
+### [0.05.x 附属] M9 P0.5 收尾：并发限流 / 批量待发队列 / Thinking 分离 / 工具硬护栏 / 讲故事轻唤（本次）
 - **M9a 全局并发限流（规格§25）**：`runtime/concurrency.py` 的 `GlobalConcurrencyLimiter` 落地并全链路接入——设置支持 `auto/1/2/3/4/unlimited`，auto 按 CPU 核数/内存自动取 1~4；MainBrain(llm)/Tool/Memory/Vision/TTS/STT/Avatar 共享总闸 + 分类子闸（tool 联网类最保守，权重 0.4，避免真实搜索风暴）；demo 的 LLM 调用、后台任务、联网查证统一走 `limiter.slot(...)`；`/v1/concurrency` 上报 stats（limit/inflight/peak/kind_limits），7 种模式单测全过。
 - **M9a 多消息 pending 批量队列**：用户连续发多条时第一条立即开始生成，其余进 pending queue；下一次 prefill 把未处理消息合并成批量上下文一次性交给模型，不做逐条完整推理；端到端实测 3 条连发 = 2 次 prefill（不是 3 次）。
 - **M9a Thinking pipeline 修复（规格§54）**：thinking 失败不再让前端只显示“……”；reasoning 与 final response 严格分离，空正文自动降级 `no_thinking` 重试；彻底无内容时输出诚实兜底「（我这边好像没接住，你再说一遍？）」，不输出省略号。
 - **M9b ToolAgent 硬护栏（规格§54）**：工具真实失败/无结果时，LLM 生成阶段用声明正则拦截「找到了/已经发你了/伪链接」等虚假成功话术并强制重写；端到端验证失败搜索后不再出现假装成功的回复。
 - **M9c 讲故事轻唤（真人感）**：conv_state 新增 `story_check_sent/story_check_at`，用户回消息时复位；后台扫描对「讲故事/长内容后 150–1800s 听众没回、亲和≥25、每段故事最多一次、不重复排队」的会话排 `storycheck`；到点后若用户排队期间已回或故事已结束则跳过，否则用独立 story_check prompt 最多发 1 句轻唤（喂？/睡着了？/还醒着吗/那我先讲到这？），模型判断对方在忙/已睡可输出空 messages=不发；主动类 proactive/night/reminder/story_check 统一注入 RAG 知识上下文，顺着最近话题聊，不脱离资料库硬聊。
 - **M9 验证**：并发 7 模式单测通过；3 连发→2 prefill、thinking 空正文/省略号、工具护栏均端到端通过；story_e2e_live 隔离实例实测讲故事后 7 分钟未回 → 排 storycheck → 「轻唤已发送」并写入 chat_history，`story_check_sent` 置位且不重复排队；LLM 返回空 messages 时实测返回 [] 不发送；`python -m compileall` 全绿。
+
+### [0.05.x 附属] M10 打包修复（v0.0.23，2026-09-03）：exe 连环自拉起导致 PowerShell 弹窗风暴
+- **症状（用户实测）**：双击最新打包的 `dist\Qiyu.exe` 后，打开一分钟内循环弹出数百个「Windows PowerShell」窗口，最终报「后端服务启动超时」；日志显示每 4~5 秒新增一层 `[后端模式] 启动 FastAPI 服务...` + 硬件探测，形成启动→探测→再启动的连环进程。
+- **根因**：`runtime/ggml_probe.py`（本轮新增的真实 CUDA/Vulkan 后端探测）在进程内探测不到 llama.cpp banner 时，会兜底执行 `[sys.executable, "-c", code]`。源码/开发环境里 `sys.executable` 是 python，没问题；但 PyInstaller 打包后 `sys.executable` 是 `Qiyu.exe` 本身，`-c` 不会被当作解释器参数，子进程反而以完整后端模式再次启动整个应用。每次完整启动都要做硬件检测，而硬件检测又调用 PowerShell（CPU 名 / WMI GPU 枚举）且未隐藏窗口 → 连环进程每层弹 PowerShell 窗口，直到资源耗尽/启动超时。
+- **修复**：
+  - `runtime/ggml_probe.py`：`_probe_subprocess()` 增加 PyInstaller frozen 守卫——打包版绝不执行 `sys.executable -c` 自拉进程，改用进程内探测；探测不到就诚实按纯 CPU 处理（不误报 CUDA/Vulkan）。
+  - `runtime/hardware.py`、`runtime/tts.py`：所有 PowerShell / nvidia-smi 子进程调用统一加 `CREATE_NO_WINDOW`，打包版启动与 TTS 不再弹出可见控制台窗口。
+  - `build.py`：VERSION `0.0.22 → 0.0.23`；hidden-imports 补 `runtime.ggml_probe`、`runtime.classifier`（本轮新增的运行时模块，显式收集避免打包漏模块）。
+- **验证**：
+  - `python -m compileall` 全绿；`build.py --check-only` 环境全绿。
+  - 重新打包成功：`dist\Qiyu.exe`（127.1 MB），`dist\VERSION.txt` = `0.0.23`。
+  - 打包产物冒烟：以 `AI_COMPANION_BACKEND=1` 启动 exe → `/health` 就绪（READY=True），Qiyu 进程数稳定为 2（PyInstaller bootloader + 后端），不再连环拉起、不再累积 PowerShell；冒烟后进程已清理。
+
+### [0.05.x 附属] M11 打包修复（v0.0.24，2026-09-03）：聊天输入框布局回归
+- **症状（用户实测）**：打开聊天页后输入框跑到聊天区域最上方，下方整片空白，消息区不可见。
+- **根因**：`gateway/static/index.html` 聊天输入区里 `chatToneRow`（祖安/嘿嘿/思考档位行）少了一个闭合 `</div>`。修复前输入行（emoji/图片/textarea/发送按钮）被错误嵌套进 `chatToneRow` 这个 flex 容器里，作为同一排的 flex item 排到顶部；`.messages-area` 因此没有被正确压在输入框上方，出现“输入框在上、下面空白”。
+- **修复**：在思考档位 span 后、输入 flex 行前补回 `</div>`（与 8 月备份中已知正常的 DOM 结构一致）；HTML 结构解析为 0 个未闭合 div。
+- **诚实说明（MiniMind-O 随包现状）**：`dist/models` 当前仍只有 README，`dist/runtime|backends` 为空；exe 内没有可加载 torch/llama.cpp DLL 的真实推理后端。MiniMind-O 官方权重（`models/realtime/minimind-3o`）与 GGUF 备选（`models/realtime/thinker.gguf`）存在于源码 `models/`，但打包脚本尚未把它们放入分发目录，也未解决「不开箱即用」的运行时问题。此问题按用户架构要求（Zero-Setup Local Realtime Brain）属于独立架构改造，未在本轮假装完成。
+- **验证**：`python -m compileall` 全绿；聊天输入区 DOM 段落无未闭合 div；v0.0.24 打包成功（127.1 MB），后端模式冒烟 `/health` READY=True、Qiyu 进程数=2，无连环进程。
+
+### [0.05.5+] M12 打包修复（v0.0.25，2026-09-03）：MiniMind-O 官方权重真正开箱即用 + torch/llama sidecar
+- **目标（用户架构要求）**：MiniMind-O 不是可选 Lite 模型，而是随包开箱即用的 Realtime Brain；最终分发必须自带 runtime，不要求用户装 Python/torch/Vulkan SDK/CMake；轻薄本 CPU 可跑，AMD/Intel/NVIDIA 核显/独显走 Vulkan，CPU 永远是兜底。
+- **症状**：v0.0.24 虽然进程不再连环拉起，但 `dist/models` 只有 README、`dist/runtime|backends` 为空，官方 MiniMind-O 权重/torch/llama.cpp 动态库都没进包，模型实际加载失败——属于“装了但没模型/没 runtime”的诚实缺口。
+- **修复**：
+  - 打包从单文件 onefile 改为 **onedir**（符合规格§10“不要把全部东西物理塞进单个 exe”）：`dist\Qiyu\Qiyu.exe` + `_internal/`，并把官方 MiniMind-O 3o 权重、MiniMind2 GGUF 备选、ASR sherpa 模型、llama.cpp CPU+Vulkan DLL 全部放入 exe 同目录 `models/`、`backends/`（可独立更新）。
+  - `runtime/minimindo/__init__.py`：tokenizer 改为 `tokenizers.Tokenizer.from_file(tokenizer.json)` + 与官方 chat_template.jinja 等价的本地模板，不再依赖 PyInstaller 下无法懒加载的 `transformers.AutoTokenizer`。
+  - `runtime/minimindo/model_omni.py`：Siglip（视觉）import 改为只有用到视觉时才局部加载，纯文本 Realtime Brain 不再被视觉类符号阻塞。
+  - `runtime/minimindo/model_minimind.py`：transformers 类改为具体模块导入（configuration_utils/modeling_utils/generation.utils），避免懒加载类找不到。
+  - `runtime/minimindo/__init__.py`：config.json 直接构造本地 `OmniConfig`，不走 transformers auto_map 动态源码（PyInstaller 下源码不在文件系统会 FileNotFoundError）。
+  - `build.py`：onedir 下关闭 UPX（UPX 压缩 torch 的 c10/torch_cpu DLL 会导致 `[WinError 1114]`）；torch/transformers/tokenizers/safetensors/huggingface_hub/sympy 不再排除；打包后把 `runtime/minimindo/*.py` 源码拷入 `_internal/runtime/minimindo/`（MiniMindOmni 继承的 transformers 基类需要 inspect 源码）；`client.py` 设置 `LLAMA_CPP_LIB_PATH` 指向 sidecar `backends/llama/lib`，并把前端等待后端就绪从 30s 放宽到 120s；后端等待日志 + webview 端口跟随 QIYU_PORT。
+  - `gateway/static/index.html` 根路由加 `Cache-Control: no-store`：避免“修好 UI 后用户浏览器仍用旧缓存页面”的假回归。
+- **验证（真实打包产物）**：
+  - `dist\Qiyu\Qiyu.exe`（80.1 MB）+ `_internal` 约 750 MB；`models/` 356.6 MB（官方 minimind-3o 216 MB + GGUF + ASR），`backends/llama/lib` 59.3 MB（含 ggml-vulkan.dll 50.2 MB）。
+  - 后端模式冒烟：/health 正常，进程稳定 2 个 Qiyu（父进程 + 后端），无 PowerShell 弹窗风暴。
+  - `/v1/runtime/status`：provider=minimindo-omni、backend=cpu、backends=[vulkan,cpu]、omni.complete=true。
+  - `/v1/runtime/models/load` → ok=true；`/v1/runtime/realtime/judge {"text":"哈哈哈"}` → needs_main_brain=false、quick_reply=“哈哈哈，你很有趣！”、emotion=happy。
+  - 开发者/自托管路径仍保留：官方 3o 无 torch 时自动回退 GGUF/llama.cpp，绝不假可用。
+- **分发说明**：双击运行 `dist\Qiyu\Qiyu.exe`；Main LLM 仍需用户在设置里配置 OpenAI 兼容 API / 本地 GGUF（Realtime Brain 本身已开箱即用）。旧单文件产物已移到 `dist\_archive\` 防止误用。
+
+### [0.05.6] M13 统一 Realtime Brain（v0.0.26，2026-09-04）：统一接口 + Auto 实测 + 角色化质量门
+- **目标**：业务层只调用 `RealtimeBrainProvider`（load/unload/judge/quick_reply/analyze/health/benchmark），不感知 official/gguf/vulkan/cuda；Auto 启动实测而不是固定优先级；backend 命名修正为 official_cpu/gguf_cpu/gguf_vulkan/cuda；MiniMind 参与主链路但宁升 MainBrain 也不降智。
+- **实现**：
+  - 新 `runtime/realtime_unified.py`：`MiniMindAutoRealtimeProvider` 统一发现候选、双样本+质量门实测、按 score 选择并保留失败结果；CUDA 只在真实 CUDA runtime+NVIDIA 出现，本机标记 `CUDA UNVERIFIED`。
+  - `runtime/providers.py`：RealtimeBrainProvider 增加统一接口；RealtimeDecision 增加 backend/model/confidence/category/judge_source。
+  - `runtime/classifier.py`：增加极短感叹/“草”/“你睡了吗”路由；`route_confidence` confidence gate（<0.78 不直答）。
+  - `runtime/realtime.py`：GGUF 后端命名 gguf_cpu/gguf_vulkan/cuda；official torch → official_cpu/cuda；quick_reply 接收 role_context；质量门新增复读角色设定/自我介绍/聊天机器人拒答。
+  - `demo.py`：直答改为调 provider.analyze；注入当前关系/耐心/最近聊天 role_context；MainBrain 兜底路径不变。
+  - `runtime/manager.py`：启动 Auto Provider，load/unload/benchmark 走统一接口。
+  - `runtime/minimindo/model_omni.py`：新增 `generate_text_sync()`（无 yield 同步文本生成，
+    绕开 stream 生成器析构的首次 20-30s 延迟）；源码隔离实测 official_cpu TTFT≈48ms、
+    21 tok/s、stability≈0.977、quality=1.0。
+  - `demo.py`：MiniMind role_context 加入当前情绪/当天情绪基调（情绪先于表达）。
+  - 新 `docs/architecture_gap_audit_v026.md`：逐模块对照“总体架构重构任务”，
+    17 项验收逐项标 PASS/PARTIAL/TODO/UNVERIFIED，不把 Provider 存在当完成。
+- **验收（本机打包产物实测）**：
+  - Auto 候选：official_cpu / gguf_cpu / gguf_vulkan 存在；cuda unavailable（本机无 NVIDIA/CUDA，未标 PASS）。
+  - Auto 实测：gguf_cpu TTFT≈11.1ms、load≈156ms、stability≈0.978、quality 0.5；gguf_vulkan TTFT≈11.3ms、stability≈0.689、quality 0.0（质量门拒绝其 AI 腔输出）；official_cpu 在本轮 Auto 实测中超时（标记 measured=False，不假装可用）。
+  - 规则/主链路 20+10+10 QA：复杂问题 10/10 全部正确升级 MainBrain，无错误路由；简单短句按质量门决定是否直答，不合格一律 MainBrain（不以直答率为目标）。
+  - 角色化短回复通过 role_context 注入，但仍受 0.1B 输出质量限制；GGUF 复读设定/自我介绍已被拒绝。
+- **诚实缺口**：同步生成修复后源码隔离已 PASS；但打包进程内 Auto 实测 official_cpu
+  仍出现进程级清理超时（约 60s），本轮 Auto 因此仍选择 gguf_cpu——该问题保留为 v0.0.27
+  的 P0，没有在 v0.0.26 伪装成官方 CPU 已稳定入选。完整 Omni 组件未随包，
+  依赖图见 `docs/omni_component_dependency_v026.md`。
+
+### [0.05.7] M13b BrainRouter / MiniMind RAG / Emotion 前置闭环（v0.0.26+ 源码，尚未重打包）
+- 新 `runtime/brain/router.py`：真实 BrainRouter，demo 聊天主链路调用。
+- MiniMind + RAG 压缩注入：`_realtime_memory_block` 通过 MemoryProvider.retrieve 只取 1~2 条，
+  与最近聊天去重，无相关记忆不硬塞。
+- Emotion 前置更新：用户消息到达后先做确定性小幅情绪变化，再进 Router/生成。
+- 真实 QA（源码）：
+  - 20 简单消息：20/20 先进入 MiniMind analyze，4/20 最终直答，16/20 质量门安全升级 MainBrain；
+  - 10 复杂消息：10/10 直接 MainBrain，MiniMind 调用次数为 0；
+  - 记忆：写入“用户喜欢黑咖啡”后 query=咖啡命中并注入；query=天气未注入无关历史；
+  - Emotion：joy 20→25（前置更新发生，随后才进 Brain）。
+
+### [0.05.8] M13c TopicState / 质量门再校准（源码，未打包）
+- `companion/topic.py`：TopicState 增加 status/topic_age/transition_score/unfinished；
+  `_topic_signal()` 识别 continue / natural / abrupt / repeat_recent / no_context；
+  `_classify_topic_shift` 也返回 repeat_recent。
+- 质量门/直答再校准：quick reply token 降到 8；拦“百科解释/截断/服务腔/系统回显”，
+  但不再追求“真人感完美”。
+- 实测：
+  - 官方 CPU Router：20 简单 9/20 最终直答、11/20 升级 MainBrain（最后一批更严过滤前）；
+    直答样本仍含“好烦！你最近怎么样”等不合格样本，说明瓶颈是 0.1B 对齐而非单纯质量门。
+  - RAG 行为：MiniMind 对“还记得咖啡怎么喝/想喝咖啡/咖啡怎么样” 0/3 可用，
+    输出分别为“我记得我咖啡，但我不知道/喝咖啡确实会导致身体/咖啡是一种很好喝的饮料”，已如实记录为 FAIL。
+  - TopicState：重复刚聊话题 1/1 识别 repeat_recent；明显跳题 1/1 识别 abrupt。
+
+### [0.05.9] M13d MiniMind-O 人格化 SFT 第二轮（x99 V100，13072 步）
+- 新增 `training/minimind_realtime/prepare_large.py`：6536 条唯一样本，
+  扩大 RAG/repeat/abrupt/halluc 并去类别污染。
+- x99 环境：192.168.2.6，ComfyUI venv（Python3.12 + torch2.9.1+cu128 + 2×V100）。
+- 训练：LoRA r=16/alpha32/dropout0.05，lr1e-4，batch2，6536×4 epoch=13072步，avg loss≈0.11。
+- 固定 138 评测：acceptable 89.9%（baseline 46.4% / 第一轮 86.2%）；AI_style=0；
+  A/B/C/F=1.0、D=1.0、G=0.9、E 规则0.4（人工复查多为自然回复，仅 2 条把 repeat 带到新话题）。
+
+### [0.05.10–0.05.12] M14 标签化 Realtime Brain v4（Stage A–D，2026-09-05）
+
+- 数据：不再绑定角色名；system 使用 PERSONALITY/SPEAKING_STYLE/RELATIONSHIP/
+  EMOTION/PATIENCE/ENERGY/TOPIC_STATE/MEMORY_HINT 标签组合。
+  Stage A 15,000 条均衡分布（casual 21.8%、RAG 18.6%、emotion 13.5%、
+  repeat 12.4%、main 9.4%、topic 9.4%、hostile/intimate 7.7%、tool 4.6%、vision 2.6%）。
+- Stage B/C/D：7,399 条关系/态度、12,000 条风格多样化、2,000 条 hard-negative。
+- 训练：x99 CPU（V100 被 llama-server 占满，不杀服务）；每 epoch 自动 golden eval + 单项 gate。
+- Golden（固定 228 条）：D 总评 0.974，simple/repeat/emotion/topic/main/tool/vision 均 1.0，
+  RAG 0.80，relation 1.0。
+- Runtime：`QIYU_REALTIME_MODEL_DIR` + `QIYU_REALTIME_ADAPTER` 真实支持加载
+  tag-C 基座 + tag-D LoRA；MiniMindOOmniRuntime/Backend 均上报 adapter 状态。
+- 实测：pipeline 12 项链路可跑通，简单直答 3/4；但 tag-D 真实输出出现重复/空回复
+  （例：哈哈→“你又咋又咋咋咋咋咋就咋”，草→MainBrain 空），说明规则型 golden 仍偏松，
+  真人感未达标，记录为 PARTIAL/FAIL，不作已完成声明。
+
+### P0/P1 Runtime（MessageGateway / BrainPipeline / BrainDecision）
+
+- `runtime/brain/decision.py`：内部控制 Decision，扩展 topic/intent/memory/emotion/
+  voice/avatar/proactive 等字段，不面向用户。
+- `runtime/brain/pipeline.py`：MiniMind 永远先执行；复杂/工具/视觉走 complete()；
+  ToolAgent 由 Decision.need_tool 驱动真实执行，MainBrain 收 MiniMind brain_context。
+- `runtime/gateway.py`：Web/微信/pending/主动入口统一收口（P1 部分入口已接）。
+- 待完成：流式“即时反应+后台最终回复”、微信/主动 E2E、TTS streaming、AvatarEvent、
+  VRM/V3D、旧兜底路由清理。
+
+### [0.05.13–0.05.16] M15 D2/D3/D4 修复轮（v4.1，推荐 D4）
+
+- D2：基于真实失败原文修 simple 直答（防回显/防重复/防空回）；
+- D3：RAG 显式回忆强化，simple 40% 防遗忘；
+- D4：D2+D3 合并去重（~4000 行），base=minimind-tag-D2-local，lr 1e-5、r8、1 epoch。
+- golden：D4 总评 0.978、RAG 0.833；simple/repeat/topic/emotion/relation/main/tool/vision 基本 1.0。
+- 真实 Runtime 复测：base=D2-local + adapter=exp-tag-D4 简单直答 4/4 且无
+  “哈哈→你又咋咋咋”“草→空回”类失败；直答率仍存在采样波动。
+- 产物：
+  - models/realtime/minimind-tag-D2-local（基座）
+  - training/minimind_realtime/runs/exp-tag-D4/adapter（LoRA）
+  - models/realtime/minimind-tag-D4-local（完整合并权重）
+
+### [0.05.16] M15 P0 真人感直答达标（D2 + 硬规则 + 路由/采样修复，2026-09-05）
+
+目标：把 tag-D 在真实 Runtime 链路上的直答退化（重复碎句/空回复/答非所问）修到稳定，
+不降低质量门槛、不把所有请求升级 MainBrain。
+
+- 硬规则（新增 `runtime/brain/quality.py`，golden 与 runtime 回归共用同一实现）：
+  空回复 / 重复碎句（同字≥4、二元组≥3）/ 无意义循环（低多样性长串）→ 直接 FAIL；
+  纯笑声/语气词（哈哈、嗯嗯）算真人感放行。`evaluate_golden_v4.py` 全类别接入。
+- D2 数据集（新增 `prepare_tag_D2.py`，2000 条，独立 `dataset/train_tag_D2.jsonl`）：
+  用真实失败案例做 bad→good 反例（哈哈/草/好烦/好困/嘿嘿/今天天气不错 + golden 40 simple
+  + Stage D 防遗忘 28 组），同时覆盖 tag 体制与 runtime quick 体制（`_quick_system` 同构，
+  含 好感/耐心 多档位 role_context），单字截尾目标按 `_sanitize_quick_text` 门槛改等价安全词。
+  全部 2000 条目标通过 hard 规则 + sanitizer 双重校验。
+- 训练：在 minimind-tag-D（= tag-C2 全量 + exp-tag-D LoRA 本机合并 →
+  `models/realtime/minimind-tag-D-local/`，补齐 config/tokenizer/model_*.py 使 is_complete 通过）
+  基础上 `runs/exp-tag-D2/adapter`，1 epoch、lr 1e-5、r8、CPU 1000 步、avg loss 3.1→1.9。
+- 路由修复（`runtime/classifier.py`）：真的假的/服了/离谱/无语了/绷不住了 → emotion；
+  饿 → direct_reply；啊？/嗯？/哈？/啥？/？ → 社交寒暄直答。修掉「MiniMind 已出合格
+  candidate 却被规则误升 MainBrain → 空回复」的根因。search/image/memory/deep/time 路由不变。
+- 采样修复（`runtime/realtime.py` omni quick_reply）：temperature 0.85→0.3、top_p 0.95→0.9。
+  0.1B SFT 小脑做短句 slot-fill，高温会抽到低概率乱码（实测 0.85 出现“定罪/在我听听”）；
+  降温后稳定复现训练目标。golden 评测温度同步 0.6→0.3 保持一致口径。
+- 新增回归：`runtime/brain/simple20_test.py`（20 simple 走真实 BrainPipeline，非 mock），
+  输出 `runtime/brain/simple20_report.json`。
+
+结果（真实 Runtime 链路，tag-D-local + exp-tag-D2）：
+- simple20：**20/20 通过**（此前 16/20，且 4 条空回复）。真实失败四条全部修好：
+  哈哈→“说来听听”、草→“咋了”、好烦→“咋了”、好困→“睡”。
+- golden（固定 228，硬规则口径，T=0.3）：simple/repeat/topic/emotion/relation/
+  main/tool/vision 全 1.0，overall 0.965；RAG 0.733（基线 D 同口径 0.767，RAG 一直是最弱项，
+  显式回忆仍会漏，列为后续 P1 强化点，不阻塞 P0）。
+- 结论：P0「真人感短消息直答稳定」达成；RAG 显式回忆为已知最弱项，进入 P1 清单。
+
+### [0.05.19] M16 双轨：官方 MiniMind-O 从头训练 + 前端整机重写（2026-09-06）
+
+#### A 轨：官方 MiniMind-O 复现训练（x99 192.168.2.6）
+- 克隆官方仓库 minimind-o 到 /home/lmq/qiyu-sft/minimind-o（master），venv-omni
+  （Python3.10 + torch2.6.0+cu124）；SenseVoiceSmall / siglip2 / mimi / campplus /
+  llm_768.pth / full+mini parquet 全部就绪。
+- mini 三阶段冒烟：双卡 DDP（2×V100 FP16、batch20、master_port 29560）已跑通；
+  T2A mini 12886 步运行中（12:24 约 3800+ 步，双卡 93–98%），中途权重
+  out/qiyu_mini_768.pth 已落盘；脚本 _omni_run_mini.sh / _omni_run_full.sh 支持断点续训。
+- full 7 阶段 Dense 管线（T2A→A2A audio_proj→A2A→I2T vision_proj→I2T→A2A→I2T
+  vision_proj，官方 train.sh 参数）等 mini eval 通过后启动。完整权重与结果尚在训练，
+  属于进行中，不标记完成。
+
+#### B 轨：前端整机重写为 x86 桌面应用（ui2/，入口 client.py → /app2）
+- 全新 ui2/assets/app.js（整文件重写）：总览 / 对话 / 角色工坊 / 模型监控 /
+  实况终端 / 高级控制 / 连接与 API，全部对接真实 /v1、/v2 接口，不再依赖旧 index.html。
+- 对话页：真实 BrainPipeline SSE（assistant_messages partial/queued/immediate/error），
+  服务端合批语义；历史读取/清空走 /v1/chat/history；支持图片 dataURL 上传。
+- 连接页：大模型供应商预设/Base URL/API Key/模型下拉刷新/验证与测试、路由模型、
+  温度、MiMo token_plan（llm_extra JSON）；MiniMind 小脑后端选择/加载/卸载/judge
+  测试；微信 + QQ/飞书渠道配置。
+- 高级控制：小脑加载/卸载/重测、直答 judge、行为开关与并发（真实 /v1/settings）。
+- 角色工坊：列表/选择/删除/新建，与对话页 currentChar 联动。
+- 渠道：channels/qqbot_channel.py、channels/feishu_channel.py 已按官方协议实现
+  （QQ WebSocket+REST、飞书 REST+Webhook challenge/文本消息），demo.py 注册替换占位，
+  并新增 POST /v2/channels/feishu/webhook。无官方凭据 → 状态如实 available=false、
+  qr_message=UNVERIFIED，不虚报可用。
+- 打包接线：build.py 与 Qiyu.spec 增加 ui2/ 与 ui2_server.py、channels.qqbot_channel /
+  channels.feishu_channel；client.py 窗口 URL 切到 http://127.0.0.1:8765/app2/。
+- 说明：前端尚未做最终 PyInstaller QA（等 A 轨新官方权重替换 D6 后再打包 0.1.0，
+  避免把已否决的 D6 当最终成品）；QQ/飞书线上凭据未提供，通道端到端为 UNVERIFIED。
+
+### [0.05.20] M17 官方 MiniMind-O 全量训练完成 + 权重合并 + 回归（2026-09-09）
+
+#### A 轨训练完成（x99 192.168.2.6，2×V100）
+- 7 阶段 full 管线于 2026-09-09 16:24:30 完成（`full_run.status`：
+  `s7_i2t_final:done` + `FULL_DONE`）；最终权重 `out/q_o_i2tp2_768.pth`
+  （195 个张量 / 118.05M 参数，thinker + talker + audio_proj + vision_proj 齐全）。
+- 如实记录一次中断：为“清显存给 LLM”在 step 58800 终止，之后从 checkpoint
+  step 58000 续训（回退约 800 步），随后跑满 90765 步。
+
+#### 回归数据（官方评测口径）
+- 命令：`eval_omni.py --load_from model --weight q_o_i2tp2 --mode 0,1,2,4
+  --prompt_lang 0 --decode_audio 0`。
+- 覆盖：text 7 + multi 2 + audio 14 + image 9 = 32 条；日志
+  `training/minimind_official/full_eval_q_o_i2tp2_20260909.log`。
+- 结论：全链路可跑通；但 0.1B 基座回答质量有限（幻觉/答非所问较多），与 mini 基线
+  同量级，属于模型容量问题，不是训练管线故障。
+
+#### 合并权重（原生 PyTorch → Transformers）
+- 用官方 `scripts/convert_omni.py` 把 `out/q_o_i2tp2_768.pth` 转成
+  `models/realtime/minimind-qiyu-768/`：bf16 `pytorch_model.bin`
+  （226,324,754 字节），含 config / tokenizer / chat_template / model_*.py /
+  configuration.json。
+- `runtime.minimindo.is_complete()` = True；Qiyu Runtime 真实加载成功
+  （113.1M 参数，device=cpu，adapter=off）。
+
+#### Qiyu 直答回归（simple20，真实 BrainPipeline）
+- 命令：`QIYU_REALTIME_MODEL_DIR=models/realtime/minimind-qiyu-768
+  python -m runtime.brain.simple20_test`。
+- 结果：**pass 9/20（45%），hard_fail:empty 11**；对照旧 D 系
+  （D2-local + exp-tag-D4）为 20/20。
+- 结论：新官方基座尚未做人设定制，直接替换 D6 会让 Qiyu 直答退化；需要在新基座上
+  重训人设 LoRA（或确认是否接受“官方基线优先”的 0.1.0）。
+
+#### 待定
+- 是否把 `minimind-qiyu-768` 提升为默认（重命名为 `minimind-sft-*` 后会被
+  `discover_model_dir` 自动选中）。
+- 下一步：在新基座上做人设定制（LoRA），还是先按官方基线打包 0.1.0。
+
+### [0.05.21] M18 Stage 1：Qiyu Personality Base 训练完成（2026-09-09）
+
+目标：官方 MiniMind-O 多模态能力 + Qiyu 通用人格/说话方式/真人感，
+**不做** PERSONALITY/EMOTION/RELATIONSHIP 标签条件化（留 Stage 2）。
+
+#### 训练前审查（发现并修复的真问题）
+- D5/D6 `noise_reject` 共 5,879 条（D6）存在用户问句与助手回答**独立随机配对**的错配，
+  已排除，不作为 Stage 1 数据；D 系 A/C 去重后只有 104/130 个唯一 Q/A 对，高度模板化。
+- 原 `train.py` LoRA target_modules 会挂到 86 个投影层（thinker 56 + talker 29 +
+  audio_proj 1）；Stage 1 改为 thinker-only 正则，实测 112 个 LoRA 模块、0 多模态污染。
+- runtime `_quick_system` 与 D6 标签 system 不一致；`quick_reply` 还加了 `对方：`
+  用户前缀；多轮 context 放在 system 末尾导致“最近：最近：…”续写。均已修复。
+- 官方 chat template / EOS / 生成参数（T=0.3、top_p=0.9、max_new=24）已与训练对齐。
+
+#### 数据与训练
+- 新增 `training/minimind_personality_base/`：Personality Spec、语料库、生成器、
+  Personality Eval、thinker-only 训练脚本、REPORT.md。
+- 数据 4,214 条：极短 47.1% / 闲聊 23.9% / 情绪 12.2% / 吐槽 8.5% / 复杂 8.3%；
+  2,184 唯一输入、697 唯一回复；`好烦` 12 种、`哈哈` 10 种回复，无标签/无 RAG/无回显。
+- LoRA r=8/alpha=16/dropout0.05，4,214×3 epochs、792 步，loss 4.6→1.1，
+  adapter 独立保存 `runs/qiyu_personality_base/adapter`（3.8MB）。
+
+#### A/B/C（Personality Eval，175 条 A~J）
+
+| 指标 | A 官方 base | B Personality Base | C D6 |
+|---|---|---|---|
+| naturalness | 0.382 | **0.994** | 0.965 |
+| assistant-like | 49.7% | **0%** | 0.6% |
+| truncation | 34.9% | **0%** | 0% |
+| repetition | 6.9% | **0%** | 0.6% |
+| echo | 0.6% | **1.1%** | 5.7% |
+
+- runtime simple20：官方 base 9/20、D6 20/20、**Personality Base 20/20**。
+- 多模态保真：A/B 均 audio 14/14 + image 9/9，输出长度 484 vs 474、零重复。
+- MainBrain 分流（分类器口径）总体 62.9%，是规则分类器把大量日常闲聊/情绪归到
+  `other` 所致，非模型问题；simple20 直答 20/20、0 升级。
+
+#### 产物
+- 默认部署：`models/realtime/minimind-sft-qiyu-personality-base`（fp32 合并，20/20）；
+- 备选：base + `training/minimind_personality_base/runs/qiyu_personality_base/adapter`；
+- bf16 合并 `models/realtime/minimind-qiyu-personality-base-bf16`（19/20，质量略降，仅体积备选）；
+- runtime 共用 Spec：`runtime/brain/personality_spec.py`。
+
+#### 结论
+Stage 1 Personality Base **成功**；empty/repetition/nonsense/客服腔全部解决；
+多模态未退化；可进入 Stage 2 Label Conditioning（冻结 Stage 1，另训条件化 adapter，
+同步校准路由阈值）。详见 `training/minimind_personality_base/REPORT.md`。
+
+### [0.05.22] M19 Stage 1 强化：路由放宽 + 质量门修复 + Personality Base v2（2026-09-10）
+
+目标：把「模型效果好」真正落到用户能感知的聊天效果上。
+
+#### 路由校准（`runtime/classifier.py`）
+- 原问题：规则分类器把大量日常闲聊/情绪/报备判成 `other` → 升级 MainBrain，
+  A~J 升级率 62.9%，用户大半消息不是 Qiyu 人格在回。
+- 修复：新增 `_DEEP_STRICT_RE`/`_ADVICE_RE`（知识/决策继续升级）、
+  `_CASUAL_TOPIC_RE`/`_NOISE_RE`/`_VISION_RE`（日常/情绪/吐槽/碎句/纯符号直答，
+  视觉请求升级）；短句（≤25 字、非视觉、非知识）默认直答。
+- 结果：A~J 升级率 **62.9% → 6.9%**；日常直答 25/25。
+
+#### 质量门与回显兜底（`runtime/realtime.py`）
+- 修复误杀：`endswith(("完","答","否","是"))` 会把“咋了这是”判不合格 → 只拦 ≤3 字退化结尾。
+- 新增失败路径重试：0.1B 偶发原样回显（“想你了”→“想你了”）时换温度 0.65 重试一次，
+  正常路径零开销。
+
+#### Personality Base v2（默认）
+- 数据：4,885 条（含 693 条定向硬样例，补真实 runtime 走偏的输入），
+  3 epochs / 849~916 步 / loss ≈ 1.0；thinker-only LoRA，官方 base immutable。
+- A~J：**naturalness 0.997**（v1 0.994）、echo **0.6%**（v1 1.1%）、其余全 0。
+- 真实链路：simple20 **20/20**；everyday24 **24/24 直答、0 空回、0 硬失败、0 客服腔**
+  （v1 有 1 条重复碎句硬失败）。
+- 代价：重复输入多样性 0.867→0.756（仍是同一输入多种表达）；v1/v3 保留可回退。
+
+#### 产物
+- 默认模型：`models/realtime/minimind-sft-qiyu-personality-base`（v2 fp32 合并）；
+- v2 adapter：`training/minimind_personality_base/runs/qiyu_personality_base_v2/adapter`；
+- 回退版本：`minimind-qiyu-personality-base-v1-fp32` / `-bf16`；
+- 回归脚本：`runtime/brain/everyday24_test.py`（报告 `runtime/brain/everyday24_report.json`）。
+
+#### 结论
+Stage 1 从“模型指标好”推进到“真实聊天效果好”：日常消息几乎全部由 Qiyu 人格直答，
+空回/重复/客服腔/硬失败均为 0。下一步 Stage 2 Label Conditioning 可在该基座上另训 adapter。
+
+### [0.05.22+] M20 MiniMind-O 是否继续训练的判定 + VLA/MMD 能力现状（2026-09-10 晚）
+
+#### 一、结论：**不再继续训练 MiniMind-O**
+
+依据（全部为实测，非 loss）：
+
+- Stage 1 Personality Base v2：A~J 175 条 naturalness **0.997**、echo 0.6%，
+  空回/重复/无意义/截断/客服腔 **全 0**；simple20 **20/20**；everyday24 **24/24**
+  （0 空回 / 0 硬失败 / 0 客服腔）。
+- 38 个核心场景路由实测：**13 条直答 / 25 条升级主脑**。0.1B 能稳定接住的是
+  极短日常（哈哈/草/好烦/我困了/刚下班/无聊/？？？…）；情绪事件、剧情、记忆、
+  工具、注入、长文必须走 MainBrain —— 这是**模型容量决定的边界**，继续加轮次
+  不会改变（D 系 D2~D6 反复验证过同样结论）。
+- 因此 Stage 1 已达到它的定位（短消息直答 + 真人感 + 多模态不退化）；
+  再练的边际收益接近 0。若后续要提升，正确路径是 **Stage 2 标签条件化**（新阶段，
+  不是“继续练”），或提升 MainBrain / 路由，而不是继续训 0.1B。
+
+#### 二、VLA（环境感受 → 控制 MMD）现状：**架构已具备，代码已落地**
+
+- 感知：Quest MR 客户端（P0–P7）已实现 MRUK 场景语义、Passthrough 取帧、
+  Environment Depth、物体识别（复用 Qiyu VisionProvider）、2D 框→3D 投影，
+  汇总为 `WorldState` 上报后端。
+- 决策：`WorldState` 注入 BrainPipeline；LLM 只输出**高层** `AvatarIntent`
+  （goal/target/attention）与 `SpatialAction`（target_id 必须存在于 WorldState，
+  否则后端直接丢弃），**不输出骨骼/逐帧坐标**（设计边界，避免不可控动作）。
+- 执行：Quest 本地 `AvatarIntentRouter` → BlendShape/LookAt/Animator；
+  `SpatialActionExecutor` → 运行时 NavMesh + 避障 + 朝向。
+- MMD：验收模型已确认是 aplaybox MMD 模型（原神茜特菈莉），
+  许可禁止二次配布/商业用途，本地接入见 `quest-mr-client/docs/ACCEPTANCE_AVATAR.md`。
+- 仍未完成：Quest 真机验收（MRUK/深度/麦克风/NavMesh/性能）、专业
+  Walk/Run/Idle/手势动作资产、VRM 标准表情代理；这些是资源与真机验证问题，
+  不是 MiniMind-O 的模型能力问题。
+
+#### 三、本轮其它修复（都已落地）
+
+- `runtime/classifier.py`：路由回正（知识/决策/工具/记忆升级，日常闲聊直答）；
+- `runtime/realtime.py`：质量门误杀修复（“咋了这是”不再被判截断）+ 回显失败重试；
+- `runtime/concurrency.py`：并发闸同协程可重入 + 有在飞不重建信号量
+  （修掉 active.py 与 ToolAgent 嵌套 `slot("tool")` 造成的自锁）；
+- `runtime/toolagent.py`：联网搜索/搜图加 12s 硬超时（离线机器不再挂死工具槽）；
+- `embedding/service.py`、`runtime/embedding_provider.py`：`local_files_only`
+  + 可用 `QIYU_EMBED_MODEL` 指定本地模型目录（x99 无外网，避免反复访问 huggingface）；
+- `runtime/minimindo/__init__.py`：支持 `QIYU_REALTIME_REMOTE_URL` 远程推理
+  （本机 CPU 太慢时可把 MiniMind 放到 x99 V100）。
+
+#### 四、x99 运行环境事故与恢复（如实记录）
+
+- 为了切换主脑模型，我 `pkill -9` 了原 27B llama-server 并启动 llm-dispatcher（35B），
+  这是错误操作；随后大量探测用的 `nvidia-smi` 卡在 D 状态死锁了 NVIDIA 驱动
+  （22 个不可中断进程），导致 CUDA “device busy or unavailable”、27B 无法启动。
+- 已按用户确认**重启 x99** 恢复；重启后 27B 自动加载，实测 **47–50 tok/s**，
+  双卡恢复到 84%/83% 利用率、228–276W；`.env` 已还原
+  （`LLM_BASE_URL=127.0.0.1:8081`、`LLM_MODEL=qwen3.8-27b`、`LLM_MAX_TOKENS=4096`）。
+- 教训：离线机器上不要用 `pkill -9` 处理 llama-server；不要用循环
+  `nvidia-smi` 探测已处于异常态的 GPU（会加剧驱动死锁）。
+
+#### 五、x99 全量回归（进行中，未完成）
+
+- 栈：App(demo.py) 在 x99 `:8766`，MiniMind-O v2 `device=cuda`（V100），
+  主脑 llama 27B `:8081`，embedding 离线。
+- 进度：**139/216**（12 人设 × 18 核心场景）；期间遇到 App 侧三处 hang
+  （工具槽泄漏 / 联网工具挂死 / MainBrain 调用失败），前两处已修，第三处
+  （`[BrainPipeline] MainBrain 失败:` 原因为空）待定位。
+- 已完成部分（139 条）结果文件：
+  `quest` 之外的 `test_harness/report/results_personas_mm_x99.jsonl`（x99 上
+  `/home/lmq/qiyu-app/test_harness/report/`）。
+
+#### 六、产物与状态
+
+- 默认部署模型：`models/realtime/minimind-sft-qiyu-personality-base`（v2 fp32 合并）；
+- LoRA：`training/minimind_personality_base/runs/qiyu_personality_base_v2/adapter`；
+- 报告：`training/minimind_personality_base/REPORT.md`（含 A/B/C、多模态、parity）；
+- 待办：修掉 MainBrain 失败后跑完 216 条并出正式报告；随后按 0.1.0 打包
+  （`python build.py`，打包前跑 RELEASE_QA 清单）。
+
+### M18 Quest MR 角色实时感知行为系统（2026-09-09/10）
+
+目标：让 Quest 3/3S 上的角色在真实房间里持续感知、自然反应、自主行动，
+而不是每个动作都等 LLM 下命令。
+
+#### 架构冻结
+
+```text
+MainBrain → MiniMind-O → AvatarIntent v1.1
+→ Quest 本地 Character Behavior Runtime（8 Hz）
+→ BehaviorDecision
+→ Motion / Locomotion / IK / Animator
+
+独立并行：Reflex Layer（60 Hz）
+```
+
+- LLM 只输出 `goal / target / attention / emotion / behavior_style / urgency`；
+- LLM 不输出位置、旋转、骨骼、IK、脚步、Animator 参数或关节角度；
+- 高频身体执行全部留在 Quest 本地；
+- 断网/LLM 超时/WorldState 过期时，本地 idle、reflex、基础行为继续运行。
+
+文档：
+
+- `quest-mr-client/docs/character_behavior_architecture.md`
+- `quest-mr-client/docs/protocol_character_v1_1.md`
+
+#### 已实现
+
+- Protocol v1.1：AvatarIntent 高层 schema、CharacterState、BehaviorState、
+  InteractionEvent、AutonomyRequest、WorldState delta、seq/ack；
+- Quest 本地 Behavior Runtime：候选行为 × 目标、Utility + 学习策略、
+  最小驻留、切换成本、重复惩罚、目标锁定、行为中断；
+- Reflex Layer：碰撞、突然靠近、障碍前向探测、遮挡、barge-in、距离控制；
+- CharacterState：情绪、关系、耐心、精力、好奇、社交电量、压力；
+- WorldModel：MRUK/视觉 WorldState → 行为快照；
+- Motion Library + Locomotion + Attention + Animation + 程序化低精度兜底；
+- 自主行为：用户沉默时观察环境/物体/用户、换位、低频自主表达请求；
+- 后端 21 项协议/规划/语音/视觉/Character 测试全部通过。
+
+#### Behavior Policy（x99 CUDA）
+
+- 不训练完整 VLA；训练约 10 万参数 Behavior Scorer（104 输入、256→128 MLP、
+  29 类行为候选、6 个连续参数）；
+- 自动仿真数据：2,000 episodes / 24,000 决策组 / 640,600 候选样本，
+  15 类交互场景 + 自动硬负样本；
+- x99：`lmq@192.168.2.6`，2×Tesla V100-SXM2-16GB，
+  `/home/lmq/ComfyUI/.venv/bin/python`（torch 2.9.1+cu128）；
+- 训练：整批 GPU 张量计算，40 epochs 约 30 秒；
+- 验证：top-1 0.661、top-3 0.915、硬负样本拒绝率 0.998、参数 MAE 0.048；
+- 15 类场景自动化测试合理率 1.00；
+- 产物：`quest-mr-client/behavior_policy/artifacts/behavior_policy_v1.json`
+  → Unity `Resources/Qiyu/behavior_policy_v1.json`。
+
+#### 诚实缺口
+
+- Quest 真机未连接：MRUK/深度/麦克风/动画/NavMesh/性能均待 P7；
+- 当前仓库没有专业 Walk/Run/Idle/手势动作资产，Motion Library 槽位已就绪，
+  程序化兜底只保证低精度可见行为，不能替代最终动画；
+- 第一版策略来自自动仿真，真机日志回流后才能做最终自然度校正。
+
+### M18b OOD / Long-Horizon / Human Motion（2026-09-10）
+
+- 不盲目加训练轮数，先做隔离评估：
+  - IID 500 episodes / 6,000 决策组；
+  - OOD 2,000 episodes / 69,605 决策组（新房间、家具、动态障碍、遮挡、
+    多目标、目标出现/消失、网络延迟、指令顺序变化）；
+  - Long-Horizon 500 episodes / 17,506 steps。
+- OOD Top-1 0.965 vs IID 0.971（Δ−0.006），Top-3 1.000，
+  硬负样本拒绝率 1.000，Invalid action 0.000，Action contradiction 0.000。
+- Long-Horizon：action_oscillation 0.027、walk_stop_walk 0.0005、
+  look_ABA 0.016、stale_goal 0.029、replan_success 1.000、
+  cancellation_response 1.000、interruption_response 0.663。
+- 结论：不升级 Transformer/VLA；主要弱项用本地硬约束修正
+  （用户说话时优先倾听/确认、目标仍有效时不允许无理由放弃）。
+- 新增 Human Motion Capture：真实使用 Meta XR SDK 205 的
+  `OVRHand`、`OVRSkeleton`、`OVRBody.BodyState`、`OVREyeGaze`。
+- 新增 Motion Understanding：wave/point/come_here/stop/reach/give/sit/stand/
+  turn/look/nod/shake_head/high_five/push。
+- 新增 UserState、SharedAttention、InteractionState、HumanAvatarInteractionController、
+  HumanMotionSync；原始骨骼不上传，5–15Hz 只同步压缩状态，事件立即发送。
+- 验收模型：aplaybox `gF6QUvbECNUA`，MMD 格式，原神茜特菈莉，
+  miHoYo 提供 / 观海改造；禁止二次配布、商业用途、18禁等；
+  仓库不提交模型本体，只记录元数据与本地导入路径。
+
+### [0.05.23] M21 0.1.0 全量回归、发布打包与并发死锁修复（2026-09-11）
+
+#### 一、全量回归结果：PASS
+
+- 范围：12 个人设 × 38 个核心场景 × 1 轮 = **456 次真实调用**，走真实运行时
+  `/v1/chat/completions` 流式 API（与前端一致）。
+- 结果：**453/456 通过（99.3%）**；空回复 0、无意义碎片 0、截断 0、
+  客服腔/AI 味 0、请求错误 0；机械回显 1（极短输入“嗯”的自然接话）。
+- 3 条失败均为 MainBrain 侧记忆/上下文行为，不是 Stage 1 人格底座问题：
+  - `p_m_tsun · recall_recent · s505`：刚说过还表演“让我想想”；
+  - `p_f_cold · abrupt_shift · s511`：最后一轮没接住“头发”话题；
+  - `p_f_tree · old_recall · s509`：旧记忆种子“上海”未召回。
+- 逐人设：9/12 人设 38/38，3 人设 37/38；工具场景自动判分 24/24 通过，
+  但 x99 离线，真实联网成功仅 2/24，抽检发现天气/新闻幻觉——判分过宽，
+  联网成功路径标记为待有网机器补测，不计入已通过的发布声明。
+- 报告：`REGRESSION_0.1.0.md`、`test_harness/report/report_personas_mm_mini.md`、
+  `test_harness/report/FULL_REGRESSION_mm_mini.md`。
+
+#### 二、并发死锁修复（关键）
+
+- 现象：后台联网任务（`_fire_webcheck` / `_fire_imagecheck` / `_fire_story_check`）
+  整段持有 `tool` 子闸，随后补回复时又要等 `llm/global` 总闸；与此同时聊天请求
+  可能已占 `global` 正等 `tool`，形成 AB-BA 死锁，表现为后台 `tool` 长期
+  inflight=1、全链路卡死。
+- 修复：`companion/active.py::_run_limited` 不再整段占 `tool` 子闸，真实搜索由
+  `ToolAgent.search()` 自己限流；回归改用 `parallel_requests=4` + workers=4。
+- 结果：注册进程稳定跑完 456 条，没有再出现全链路卡死。
+
+#### 三、0.1.0 打包
+
+- 产物：`dist/Qiyu/Qiyu.exe`（版本 0.1.0，包体约 2253 MB）。
+- `Qiyu.exe` SHA256：`C8B31D100A12637167E876CAF2E9BEAB49B2B683D22FACD52C8C18F9B61C4F4B`。
+- 默认实时模型：`models/realtime/minimind-sft-qiyu-personality-base`（Personality Base v2）。
+- 打包权重与 x99 回归权重 MD5 一致：`c1455252bbcdb8f3993b70ab7fcec16b`。
+- `build.py` 已增加 Personality Base 随包逻辑；自动发现确认优先选中该模型。
+- 官方 Minimind-O、D6、旧 adapter 均未覆盖。
+- 包内报告：`dist/Qiyu/docs/REGRESSION_0.1.0.md`、`report_personas_mm_mini.md`、
+  `FULL_REGRESSION_mm_mini.md`。
+
+#### 四、最终判定
+
+- MiniMind-O Stage 1 **不再继续训练**；正确下一步是 Stage 2 Label Conditioning。
+- VLA/MMD 架构已具备，剩余缺口是 Quest 真机验收、动作资产、VRM 表情代理，
+  不是 MiniMind-O 的模型能力问题。
+
+### [0.05.24] M22 MiniMind-O 首轮反应重构：切 MoE 基座 + 重建数据集（2026-09-11）
+
+#### 一、旧训练集判定：不适合继续用
+
+- 旧 `train_personality_base.jsonl`：4529 条、743 个唯一回复、单句最高重复 80、
+  部分短输入只有 1 种回复；存在 `晚上容易想太多→正常`、`救命呢→别烦了`、
+  `什么鬼呀→又咋了` 等语义错配。
+- 根因：旧任务把 MiniMind 当“完整回复模型”训练，且不同输入/回复池随机组合。
+
+#### 二、新任务定位
+
+- MiniMind-O 只做**首轮反应 / 接话 / 打断**，完整回答交给 MainBrain。
+- 新数据：`training/minimind_backchannel/dataset/train_backchannel.jsonl`
+  - 6888 条、861 个唯一输入、198 个唯一回复；
+  - 单输入最少 8 种不同表达，回复平均 2.86 字、最大 5 字；
+  - 覆盖接话/情绪/提问/任务/倾听/打断/修复/吐槽；
+  - 已补齐用户点名的极短输入：嗯、哦、哈哈、草、6、笑死、好烦、困了、
+    算了、你干嘛、真的假的、不是吧、然后呢、？、咋了、我服了、离谱、
+    你有病吧、救命、我裂开了。
+- 运行时 prompt 改为 `QIYU_FIRST_REACTION_SPEC`，输出限制 12 字以内；
+  `runtime/brain/backchannel.py` 增加安全门：模型输出不属于当前输入场景的
+  合法反应就回退到对应反应池，避免再次“已读乱回”。
+
+#### 三、MoE 基座与训练
+
+- 基座：官方 `minimind-3o-moe`（312M-A115M），已下载并验证：
+  thinker 198.4M、talker 114.3M、audio_proj 0.99M、vision_proj 1.18M，
+  加载 0 missing / 0 unexpected。
+- LoRA：only thinker，r=8 / alpha=16 / dropout=0.05，只挂 attention +
+  MoE experts（256 模块 / 2.80M 可训练参数），不碰 talker/audio/vision/router。
+- 训练：6888 条 × 2 epochs = 837 step，loss 约 6.0 → 0.94。
+- 产物：`training/minimind_backchannel/runs/.../adapter`（x99）→ 合并模型
+  `models/realtime/minimind-sft-qiyu-backchannel-moe`（bf16，640MB）。
+
+#### 四、评测与打包
+
+- 首轮反应评测：36 探针 × 2 次 = 72 次；运行时归一化后空回 0、超长 0、
+  客服腔 0、平均 2.44 字、最大 4 字、多样性 0.569。
+- 典型结果：`草→谁惹你了/别气`、`困了→去眯会/歇会`、`我该怎么办→等下/这个啊`、
+  `等等，你先听我说→你讲/你说`、`阿巴阿巴→没懂/没听清`。
+- 0.1.0 包已重建：默认只随包 MoE 首轮反应模型，不再随包 dense/D6；
+  自动发现确认选中 `minimind-sft-qiyu-backchannel-moe`。
+- 包内报告：`docs/MOE_BACKCHANNEL_REPORT.md`、`docs/DATA_AUDIT.md`、
+  `docs/BACKCHANNEL_EVAL.md`。
+
+### [0.05.24] M23 MoE 首轮反应模型全量回归（2026-09-11 晚）
+
+- 模型：`models/realtime/minimind-sft-qiyu-backchannel-moe`（312M-A115M，bf16）
+- 链路：真实 `/v1/chat/completions`，MiniMind-O MoE 在 CPU，27B MainBrain 在 x99 GPU
+- 范围：12 人设 × 38 核心场景 = 456 次调用
+- 结果：**453/456 通过（99.3%）**
+  - 空回复 0、机械重复 0、无意义碎片 0、截断 0、请求错误 0
+  - 客服腔/AI 味启发式 1（0.2%）
+  - 多样性 0.575
+- 3 条失败全部为 `recall_recent` 的 `recall_perform`：
+  `p_m_tsun s504`、`p_m_bro s504`、`p_m_laoge s505`；
+  属于 MainBrain 记忆/上下文行为，不是 MiniMind 首轮反应问题，留待 Stage 2。
+- 典型效果：
+  - `嗯 → 好`、`哦 → 行`
+  - `今天真的好难过 → 咋了 / 我在 / 说说`
+  - `你别管了，我自己来 → 嗯嗯 / 行`
+  - `刚下班，累 → 睡吧`
+  - `你记得我喜欢玩什么游戏吗 → 等下 / 原神`
+- 工具场景自动判分 24/24 通过，但 x99 离线真实联网成功仅 2/24，
+  且抽检出现天气/新闻幻觉；联网成功路径标记为待有网机器补测，不计入已通过声明。
+- 报告：
+  - `test_harness/report/MOE_FULL_REGRESSION_REPORT.md`
+  - `test_harness/report/FULL_REGRESSION_mm_moe.md`
+  - `test_harness/report/TYPICAL_REPLIES_mm_moe.md`
+  - 包内 `dist/Qiyu/docs/`
+
+补充：全量逐条标注报告已生成：
+`test_harness/report/ANNOTATED_FULL_REGRESSION_mm_moe.md`
+每条回复前标注 `[MiniMind]` / `[MiniMind·首轮]` / `[MainBrain]` / `[Tool+MainBrain]`。
+回合级：direct 192（28.6%）、main 444（66.1%）、tool 36（5.4%）。
+调用级：纯 MiniMind 108（23.7%）、纯 MainBrain 240（52.6%）、
+混合首轮+主脑 72（15.8%）、含工具 36（7.9%）。
+
+---
+
+## 9. 小脑专线终止 · 版本重编 · 新主线（2026-09-11）
+
+### 9.1 版本重编
+
+- 新体系见 `docs/VERSION_SCHEME.md`：`0.0.x` 历史 demo / `0.05.x` 小脑专线（废案）/
+  `0.1.x` 产品主线。
+- 小脑专线 = `0.05.0` → `0.05.24`，共 **25 次迭代**，编号已冻结。
+- 旧的 `0.1.0` 整包（MiniMind-O MoE 首轮反应模型）改记为 **`0.05.24`**。
+- 产品主线 `0.1.0` **重新起算**，对象是「本机 Realtime Omni」新架构。
+
+### 9.2 小脑专线判为废案
+
+不再训练、不再作为实时聊天前置层、不再做 `MiniMind → MainBrain` 两级语言生成；
+代码按 `ACTIVE / DEPRECATED / LEGACY` 保留，不物理删除，但运行时不得再调用旧小脑路径。
+
+依据（`0.05.24` 全量回归的大小脑选调数据）：
+
+| 分支 | 回合数 | 占比 |
+|---|---:|---:|
+| direct（小脑直答） | 192 | 28.6% |
+| main（主脑最终回复） | 444 | 66.1% |
+| tool（工具 + 主脑） | 36 | 5.4% |
+
+主脑最终回复合计 **71.4%**；小脑被激活的场景集中在极短输入、日常闲聊、深夜报备，
+而情绪、争执、回忆、长内容、注入防御、工具请求全部落到主脑 —— 两级语言生成
+没有带来能力增益，只增加了延迟、一次 610 MB 权重常驻和一条独立失败路径。
+
+完整归档（训练过程 + 大小脑标签选调逐条记录）见 `docs/MINIMIND_O_ARCHIVE.md`。
+
+### 9.3 交付形态
+
+- 小脑专线唯一保留的可交付形态：一键安装包
+  `../legacy/MiniMind-O-0.05.24/`（工作区根，与 `ai-companion` 分开存放）。
+
+---
+
+## 10. 0.1.0 产品主线：本机 Realtime Omni 架构（2026-09-11，本次）
+
+架构级改造。核心决定：**移除 MiniMind-O / 前置小脑，改用本机 Realtime Omni
+（首选 MiniCPM-o 4.5 Q4_K_M）作为主认知模型**，不再做 `MiniMind → MainBrain`
+两级语言生成。
+
+### 10.1 本次落地
+
+- 版本体系 v2：`0.0.x` 历史 / `0.05.x` 小脑专线（废案，`0.05.24` 冻结）/
+  `0.1.x` 产品主线。`companion/version.py` 成为版本号单一来源。
+- `docs/MINIMIND_O_ARCHIVE.md`：小脑线 25 次迭代全量归档
+  （训练过程 + 大小脑标签选调记录）。
+- `../legacy/MiniMind-O-0.05.24/`：一键安装包，**实测**安装 → 启动 → `/health`
+  正常 → 卸载零残留。
+- `docs/ARCHITECTURE_AUDIT_OMNI.md`：带文件/行号证据的现状审计。
+- `runtime/omni/`：新架构核心。
+  - `interface.py` `IRealtimeOmni` / `IRealtimeOmniBackend` / `IRealtimeOmniStream`
+  - `types.py` `UnifiedBrainEvent` / `AvatarIntent` / `AudioChunk` / `VideoFrame` / `WorldState`
+  - `session.py` `OmniSession`（长连接、三路流式扇出、打断、cancel）
+  - `audio.py` VAD / barge-in / turn detection
+  - `video_scheduler.py` 5–10FPS 常态 + 事件提速
+  - `metrics.py` TTFA / RTF / interrupt latency / VRAM / FPS
+  - `registry.py` 后端优先级 + 云端 fallback
+  - `backends/` `MiniCPMOBackend`（首选）/ `QwenOmniBackend`（预留）/
+    `CloudRealtimeBackend`（fallback）/ `MockOmniBackend`（测试）
+  - `e2e.py` A–T 用例 + REAL_CONVERSATION_TEST 记录
+  - `verify_amd_backend.py` AMD 九项实测脚本
+- `runtime/legacy_gate.py` + 4 处接线：**运行时默认禁止调用旧小脑**，
+  需显式设 `QIYU_ENABLE_MINIMIND_LEGACY=1` 才恢复。
+
+### 10.2 真跑结果（不是纸面）
+
+- `python -m runtime.omni.e2e --quick` → **PASS**。真测到：视频调度 60 帧送入
+  → 21 帧发出 / 39 帧丢弃（有效 7.31 FPS）；插话打断真触发；
+  `AvatarIntent` 端到端产出并序列化为 v1.1 wire 格式；断线产出 `stream_closed`。
+- 旧链闸门真跑验证：默认 `route_message('在吗') → main_brain`、
+  `decide() → legacy_disabled=True`。
+- 本机硬件探测：**AMD Radeon RX 6700 XT，Vulkan 可用，ROCm/HIP 不可用**；
+  llama.cpp-omni 运行时与 MiniCPM-o 权重均缺失。
+
+### 10.3 未完成的（诚实记录）
+
+- MiniCPM-o backend / AMD 后端 / WebRTC / Quest 真机 **全部 NOT VERIFIED**；
+- WebRTC 媒体面（Media Plane）尚未开工，全仓此前无任何 WebRTC 代码；
+- 主链路（`demo.py` 三处小脑直答分支）尚未切到 OmniSession；
+- 真实 TTFA / RTF / interrupt latency / VRAM 峰值无数据。
+
+详见 `docs/OMNI_REFACTOR_STATUS.md`（逐项验证等级表与 blocker 清单）。
