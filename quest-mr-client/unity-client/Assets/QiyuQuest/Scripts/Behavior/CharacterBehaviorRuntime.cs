@@ -52,6 +52,10 @@ namespace Qiyu.Quest.Behavior
         [SerializeField] private string avatarModelResource = "Qiyu/Avatar/QiyuAvatarModel";
         [SerializeField] private float avatarModelYawOffset;
         [SerializeField] private float avatarModelScale = 1f;
+        [Header("用户动捕镜像 Avatar（公开模型）")]
+        [SerializeField] private string mirrorAvatarResource = "Qiyu/Mirror/QiyuMirrorAvatar";
+        [SerializeField] private float mirrorDistanceMeters = 1.6f;
+        [SerializeField] private string mirrorAvatarAssetResource = "Qiyu/Mirror/QiyuMirrorAvatar";
         [SerializeField] private Transform userHead;
 
         [Header("运行时")]
@@ -974,6 +978,84 @@ namespace Qiyu.Quest.Behavior
         }
 
         /// <summary>
+        /// 创建"用户动捕镜像 Avatar"：站在用户前方 1.6m，面对用户，
+        /// 由 MocapAvatarDriver 把用户实时动作套上去。
+        ///
+        /// 用公开模型（CC-BY，见 Resources/Qiyu/Mirror/ATTRIBUTION.md），
+        /// 与主角色模型分开，便于对外分发时替换。
+        /// </summary>
+        private void EnsureMirrorAvatar()
+        {
+            if (string.IsNullOrWhiteSpace(mirrorAvatarResource) ||
+                GameObject.Find("QiyuMirrorAvatar") != null)
+            {
+                return;
+            }
+            var prefab = Resources.Load<GameObject>(mirrorAvatarResource);
+            if (prefab == null)
+            {
+                Debug.LogWarning(
+                    $"[QiyuMirror] 未找到 Resources/{mirrorAvatarResource}，" +
+                    "用户动捕镜像未启用（不影响主角色）");
+                return;
+            }
+            var camera = Camera.main;
+            var forward = camera != null ? camera.transform.forward : Vector3.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 1e-4f)
+            {
+                forward = Vector3.forward;
+            }
+            forward.Normalize();
+            var origin = camera != null ? camera.transform.position : transform.position;
+            var position = origin + forward * mirrorDistanceMeters;
+            position.y = camera != null ? origin.y - 1.5f : position.y;
+            var mirror = Instantiate(prefab, position, Quaternion.LookRotation(-forward));
+            mirror.name = "QiyuMirrorAvatar";
+            var animator = mirror.GetComponentInChildren<Animator>();
+            if (animator != null)
+            {
+                // 显式赋 Humanoid Avatar：ModelImporter 对这个骨架不生效，
+                // Avatar 资产由 QiyuAvatarImportSetup.EnsureMirrorAvatarAsset 生成。
+                var humanAvatar = Resources.Load<UnityEngine.Avatar>(mirrorAvatarAssetResource);
+                if (humanAvatar != null)
+                {
+                    animator.avatar = humanAvatar;
+                }
+                animator.applyRootMotion = false;
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                Debug.Log($"[QiyuMirror] Animator avatar=" +
+                          $"{(animator.avatar != null && animator.avatar.isHuman ? "Humanoid" : "缺失")}");
+            }
+            var driver = mirror.AddComponent<MocapAvatarDriver>();
+            var broadcaster = gameObject.GetComponent<MotionStateBroadcaster>();
+            if (broadcaster == null)
+            {
+                broadcaster = gameObject.AddComponent<MotionStateBroadcaster>();
+            }
+            broadcaster.AddConsumer(new MocapAvatarConsumer(driver));
+            Debug.Log($"[QiyuMirror] 已生成动捕镜像 Avatar 距用户 " +
+                      $"{mirrorDistanceMeters:F1}m（公开模型 CC-BY，可对外分发）");
+        }
+
+        /// <summary>把动作状态快照转交给镜像驱动（保持接口解耦）。</summary>
+        private sealed class MocapAvatarConsumer : IMotionStateConsumer
+        {
+            private readonly MocapAvatarDriver _driver;
+
+            public MocapAvatarConsumer(MocapAvatarDriver driver)
+            {
+                _driver = driver;
+            }
+
+            public void OnMotionState(MotionStateSnapshot snapshot)
+            {
+                // 驱动本身从 HumanMotionCapture 读实时状态，
+                // 这里只是把它接到统一接口上，便于将来换成其它数据源。
+            }
+        }
+
+        /// <summary>
         /// 外部（后端 Behavior 层）注入一条高层行为指令。
         /// 只接受语义目标（goal/target/attention/emotion），
         /// 不接受坐标、骨骼、Animator 参数或 BlendShape 数值。
@@ -1025,6 +1107,9 @@ namespace Qiyu.Quest.Behavior
                 gameObject.AddComponent<HumanMotionSync>();
             if (GetComponent<BehaviorActionBridge>() == null)
                 gameObject.AddComponent<BehaviorActionBridge>();
+            if (avatarRoot != null && avatarRoot.GetComponent<AmbientLife>() == null)
+                avatarRoot.gameObject.AddComponent<AmbientLife>();
+            EnsureMirrorAvatar();
 
             if (avatarRoot == null)
             {
@@ -1122,6 +1207,11 @@ namespace Qiyu.Quest.Behavior
         }
     }
 }
+
+
+
+
+
 
 
 

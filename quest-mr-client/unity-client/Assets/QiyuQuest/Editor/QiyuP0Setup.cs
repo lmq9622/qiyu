@@ -62,6 +62,7 @@ namespace Qiyu.Quest.Editor
             }
             // 角色材质贴图必须在打包前绑定：Unity 不会自动绑 MMD 的中文贴图引用
             QiyuAvatarMaterialBinder.BindAll();
+            QiyuAvatarImportSetup.EnsureMirrorAvatarAsset();
             var output = Path.GetFullPath(Path.Combine(Application.dataPath, "../Builds/QiyuQuestP0.apk"));
             Directory.CreateDirectory(Path.GetDirectoryName(output) ?? "Builds");
             var options = new BuildPlayerOptions
@@ -802,4 +803,5 @@ namespace Qiyu.Quest.Editor
         }
     }
 }
+
 

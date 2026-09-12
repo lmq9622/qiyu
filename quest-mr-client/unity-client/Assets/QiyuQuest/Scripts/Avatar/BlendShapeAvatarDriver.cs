@@ -59,6 +59,9 @@ namespace Qiyu.Quest.Avatar
         private float _nextBlinkAt;
         private float _blinkStartedAt = -1f;
 
+        /// <summary>true 时由 Ambient Life 统一驱动眨眼（生理表现独立于行为系统）。</summary>
+        public bool ExternalBlinkControl { get; set; }
+
         public int IndexedShapeCount => _shapeIndex.Count;
         public string MouthShape => _mouthShape;
         public string BlinkShape => _blinkShape;
@@ -118,7 +121,7 @@ namespace Qiyu.Quest.Avatar
 
         private void Update()
         {
-            if (!idleBlink || string.IsNullOrEmpty(_blinkShape))
+            if (!idleBlink || ExternalBlinkControl || string.IsNullOrEmpty(_blinkShape))
             {
                 return;
             }
@@ -318,3 +321,4 @@ namespace Qiyu.Quest.Avatar
         }
     }
 }
+
