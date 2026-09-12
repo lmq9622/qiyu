@@ -10,6 +10,9 @@ FROM python:3.11-slim
 #   QIYU_LLM_URL/MODEL/API_KEY  强制对话模型（OpenAI 兼容）
 #   QIYU_BRAIN_PIPELINE  0=经典确定性链路
 ENV PYTHONUNBUFFERED=1 \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_RETRIES=5 \
+    PIP_TIMEOUT=120 \
     QIYU_HOST=0.0.0.0 \
     QIYU_PORT=8765 \
     QIYU_DATA_DIR=/data \
@@ -24,7 +27,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    || (pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple)
 
 COPY . .
 
