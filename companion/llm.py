@@ -801,7 +801,6 @@ class LLMClient(MainBrainProvider):
             "max_tokens": 6000,
         }
         try:
-            from companion.settings import load_runtime_settings
             _extra = load_runtime_settings().get("llm_extra") or {}
             for _k, _v in (_extra or {}).items():
                 if _v not in (None, ""):
@@ -820,7 +819,7 @@ class LLMClient(MainBrainProvider):
                 resp = await client.post(f"{url}/chat/completions", json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            msg = data["choices"][0].get("message", {})
+            msg = (data.get("choices") or [{}])[0].get("message", {})
             content = (msg.get("content") or "").strip()
             thinking_on = bool((payload.get("chat_template_kwargs") or {}).get("enable_thinking") in (True, "true", "True", 1))
             # 严格分离：最终回复只认 content；reasoning_content 仅作思考过程，绝不顶替正片
@@ -860,7 +859,6 @@ class LLMClient(MainBrainProvider):
             "stream": True,
         }
         try:
-            from companion.settings import load_runtime_settings
             _extra = load_runtime_settings().get("llm_extra") or {}
             for _k, _v in (_extra or {}).items():
                 if _v not in (None, ""):
@@ -886,7 +884,7 @@ class LLMClient(MainBrainProvider):
                                 obj = json.loads(data)
                             except Exception:
                                 continue
-                            delta = obj.get("choices", [{}])[0].get("delta", {}) or {}
+                            delta = (obj.get("choices") or [{}])[0].get("delta", {}) or {}
                             reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
                             content = delta.get("content") or ""
                             if reasoning:
@@ -940,11 +938,11 @@ class LLMClient(MainBrainProvider):
             raise Exception(f"路由模型调用失败 ({type(e).__name__}): {e or '无详细信息'}") from e
         content = ""
         try:
-            content = data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
         except Exception:
             content = ""
         if not content.strip():
-            reason = data.get("choices", [{}])[0].get("finish_reason", "unknown")
+            reason = (data.get("choices") or [{}])[0].get("finish_reason", "unknown")
             raise Exception(f"路由模型返回了空内容（finish_reason={reason}）。该模型可能是推理模型，思考消耗了全部输出额度，请降低生成并发或换用非推理模型作为路由模型。")
         return content
 
@@ -980,7 +978,7 @@ class LLMClient(MainBrainProvider):
                             obj = json.loads(data)
                         except Exception:
                             continue
-                        delta = obj.get("choices", [{}])[0].get("delta", {}) or {}
+                        delta = (obj.get("choices") or [{}])[0].get("delta", {}) or {}
                         content = delta.get("content") or ""
                         reasoning = delta.get("reasoning_content") or delta.get("reasoning") or ""
                         if reasoning:
