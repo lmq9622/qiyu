@@ -21,7 +21,7 @@ v0.0.17 是 `0.0.x` 线的最后一版，这里发布的是**可运行的历史�
 
 | 文件 | 大小 | SHA256 |
 |---|---:|---|
-| `Qiyu-0.0.17-win64.exe` | 约 137.9 MB | `390E16C6B84FE9C4C79607369559E3B3D544076FD81E03D46BF79909626256ED` |
+| `Qiyu-0.0.17-win64.exe` | 约 137.9 MB | `1DA6DD9D26E46EE00BF9C8BA8A414BB7CD420E6723E9E34FE0EA1D0D93CF4FB7` |
 
 双击即可运行（会自带浏览器内核窗口，无需额外安装）。Windows SmartScreen 可能提示未签名，
 选择「更多信息 → 仍要运行」。运行数据落在 `%USERPROFILE%\.ai_companion\`。
