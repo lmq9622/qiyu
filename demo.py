@@ -961,6 +961,27 @@ def _should_nudge(parsed: dict, user_input: str) -> bool:
         return True
     return False
 
+def _conversation_engaged(user_id: str, char_id: str, parsed: dict, user_content: str) -> bool:
+    """收尾召回闸门：聊得久 / 聊得投入才值得追问；随便打个招呼就不追了（"人呢"别每次都砸）
+    信号：30 分钟滑动窗口内的往返条数(burst_msgs) + 双方文本长度 + 场景热度"""
+    try:
+        cs = _conv_state(user_id, char_id)
+        burst = int(cs.get("burst_msgs") or 0)
+        reply_text = "".join(m.get("text", "") for m in (parsed.get("messages") or []))
+        user_len = len((user_content or "").strip())
+        scene = cs.get("scene") or ""
+        if burst >= 8:
+            return True
+        if burst >= 5 and (user_len >= 15 or len(reply_text) >= 120):
+            return True
+        if scene in ("playful", "intimate", "argument") and burst >= 4:
+            return True
+        if user_len >= 60 and burst >= 3:
+            return True
+    except Exception:
+        pass
+    return False
+
 
 def _detect_user_fact(text: str) -> list:
     """轻量确定性检测：用户明确自曝个人信息/偏好（非提问、非对AI的攻击），返回可入库的短句列表。
@@ -1341,9 +1362,12 @@ def _apply_chat_side_effects(user_id: str, char_id: str, parsed: dict, user_cont
                 _register_schedule(user_id, {"kind": "reminder", "due_at": due, "payload": {"text": sch.get("text", ""), "request": (user_content or "")[:300], "char_id": char_id}})
     # 兜底：回复以提问/给建议结尾 → 按"聊天投入值"排追问梯次（低值不追，正常1次，偏高2次，很高3~4次）
     if nudge_minutes is None and _should_nudge(parsed, user_content):
-        nudge_minutes = 5
+        if _conversation_engaged(user_id, char_id, parsed, user_content):
+            nudge_minutes = 5
+        # 短对话/随口一问 → 不追，避免硬凑追问
     if nudge_minutes is not None:
         plan = _nudge_plan(_investment_value(user_id, char_id), first_after=nudge_minutes)
+        plan = plan[:2]  # 投入也只追 2 次封顶，不缠
         if plan:
             _cancel_nudge(user_id, char_id)
             for attempt, after_min in plan:
@@ -2959,6 +2983,11 @@ def _update_conv_state(user_id: str, char_id: str, event: str, parsed: dict | No
     now = time.time()
     if event == "user_message":
         cs["last_user_at"] = now
+        _la = float(cs.get("last_any_at") or 0)
+        if _la and now - _la > 1800:
+            cs["burst_msgs"] = 0
+        cs["burst_msgs"] = int(cs.get("burst_msgs") or 0) + 1
+        cs["last_any_at"] = now
         cs["unanswered_pending"] = None
         cs["conv_state"] = "ACTIVE"
         cs["ended_at"] = 0
@@ -2988,6 +3017,11 @@ def _update_conv_state(user_id: str, char_id: str, event: str, parsed: dict | No
             cs["last_user_emotion"] = str(parsed.get("user_emotion") or "")[:40]
     elif event == "ai_reply":
         cs["last_ai_at"] = now
+        _la = float(cs.get("last_any_at") or 0)
+        if _la and now - _la > 1800:
+            cs["burst_msgs"] = 0
+        cs["burst_msgs"] = int(cs.get("burst_msgs") or 0) + 1
+        cs["last_any_at"] = now
         cs["conv_state"] = "ACTIVE"
         rel = _init_relation(user_id, char_id)
         cs["patience"] = _desire_value(user_id, char_id)
